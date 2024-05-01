@@ -1,0 +1,1025 @@
+---
+title: Basic analysis and QC for 10x scRNA-seq
+output: html_document
+---
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+```
+
+## Read all the mtx files from STARsolo
+
+Here we assume that we have the results of the 10x scRNA-seq data aligned with [STARsolo](https://github.com/alexdobin/STAR/blob/master/docs/STARsolo.md)
+
+```{r}
+# to store intermediate results
+directory_intermediate = "../intermediate_results/"
+```
+
+```{r}
+# STARsolo output
+inp_dir = "../processed/"
+
+files <- list.dirs(path = inp_dir, full.names = T, recursive = T) %>% unlist
+```
+
+```{r}
+files_filtered <- grep("Gene/filtered",x = files, value = T)
+```
+
+```{r}
+files_94 <- grep("I94",x = files_filtered, value = T)
+files_95 <- grep("I95",x = files_filtered, value = T)
+files_38 <- grep("J38",x = files_filtered, value = T)
+```
+
+```{r}
+
+                                                         
+library(Matrix)
+library(SoupX)
+
+mtx_all <- lapply(files_filtered, function(x) Seurat::ReadMtx(mtx = list.files(x, pattern = "*.mtx", full.names = T),
+                                                        cells = list.files(x, pattern = "*barcodes.tsv", full.names = T),
+                                                        features = list.files(x, pattern = "*features.tsv", full.names = T)))
+
+mtx_all_raw <- lapply(files_filtered %>% gsub("filtered","raw",.), function(x) Seurat::ReadMtx(mtx = list.files(x, pattern = "*.mtx", full.names = T),
+                                                        cells = list.files(x, pattern = "*barcodes.tsv", full.names = T),
+                                                        features = list.files(x, pattern = "*features.tsv", full.names = T)))
+
+
+                                                         
+
+scl = mapply(mtx_all_raw,mtx_all,FUN =  function(tod,toc) {
+  common_genes <- intersect(rownames(tod),rownames(toc))
+  
+  sc <- SoupChannel(tod = tod[common_genes,] ,toc =  toc[common_genes,] )
+  sc <- setContaminationFraction(sc, 0.05) 
+  sobj <- CreateSeuratObject(toc[common_genes,])  %>% NormalizeData() %>% 
+    FindVariableFeatures() %>%
+    ScaleData() %>%
+    RunPCA(npcs = 30, verbose = FALSE) %>%
+    FindNeighbors(reduction = "pca", dims = 1:30, verbose = FALSE) %>%
+    FindClusters(resolution = 1, verbose = FALSE)
+  sc <- setClusters(sc,sobj$seurat_clusters)
+  return(sc)
+  }, SIMPLIFY = F)
+
+# Clean the data
+out = easypar::run(lapply(scl, list),FUN =  function(sc) adjustCounts(sc,roundToInt = T, verbose = T), parallel = F)
+
+```
+
+We remove redundant labels and leave just sample names
+
+```{r}
+nms <- stringr::str_match("[IJ][93].*_S[0-9]/", string = files_filtered)
+nms <- gsub(pattern = "_S[0-9]/",replacement="",nms)
+batch <- stringr::str_match( "[IJ][0-9]{2}",string = nms)
+nms <- gsub(pattern = "[IJ][0-9]{6}_",replacement="",nms)
+nms <- gsub(pattern = "^[0-9]{2}_?",replacement="",nms)
+nms <- gsub(pattern = "Rep",replacement="",nms)
+nms
+```
+
+Here we create a Seurat object for each sample and add some metadata (sample name and sequencing batch)
+
+```{r}
+seur_all <- lapply(1:length(mtx_all), function(i) CreateSeuratObject(counts = mtx_all[[i]], project = nms[i]))
+seur_all <- lapply(1:length(mtx_all), function(i) {
+    tmp <- rep(nms[i], ncol(seur_all[[i]]))
+    names(tmp) <- colnames(seur_all[[i]])
+    AddMetaData(seur_all[[i]], metadata = tmp,
+      col.name = 'sample_id')
+
+})
+seur_all <- lapply(1:length(mtx_all), function(i) {
+    tmp <- rep(batch[i], ncol(seur_all[[i]]))
+    names(tmp) <- colnames(seur_all[[i]])
+    AddMetaData(seur_all[[i]], metadata = tmp,
+      col.name = 'batch_id')
+
+})
+```
+
+```{r}
+saveRDS(seur_all, file = "../intermediate_results/suer_all_MSS1.rds")
+```
+
+## Barcode integration 
+
+```{r}
+seur_all <- readRDS("../intermediate_results/suer_all_MSS1.rds")
+```
+
+```{r}
+# output  of the barcode  alignment scripts for scRNA-seq
+INbarcodes <- "../processed_barcode/"
+
+files_barcodes <- list.dirs(path = INbarcodes, full.names = T, recursive = T) %>% unlist
+
+files_barcodes <- files_barcodes %>% grep("GeneFull/raw",x = ., value = T) %>% grep("ipynb_checkpoints", ., value = T, invert = T)
+
+```
+
+```{r}
+enriched_barcodes <- lapply(files_barcodes, function(x) Seurat::ReadMtx(mtx = list.files(x, pattern = "*.mtx", full.names = T), 
+                                                        cells = list.files(x, pattern = "*barcodes.tsv", full.names = T), 
+                                                        features = list.files(x, pattern = "*features.tsv", full.names = T)))
+```
+
+```{r}
+nms_bar <- gsub(pattern = "../processed_barcode/",replacement="",files_barcodes, fixed = TRUE)
+nms_bar <- gsub(pattern = "_S[0-9].*",replacement="",nms_bar)
+nms_bar <- gsub(pattern = "-",replacement="_",nms_bar)
+nms_bar <- gsub(pattern = "^[0-9]*_",replacement="",nms_bar)
+nms_bar <- gsub(pattern = "^R_",replacement="",nms_bar)
+nms_bar <- gsub(pattern = "Rep",replacement="",nms_bar)
+nms_bar
+```
+
+We check if our sample name are the same both for expression and barcodes
+
+```{r}
+all(nms_bar %in% nms)
+```
+
+We just order them in the same way
+
+```{r}
+names(enriched_barcodes) <- nms_bar
+enriched_barcodes <- enriched_barcodes[nms]
+```
+
+We define some useful functions to handle barcodes
+
+```{r}
+conver_to_tibble <- function(mat){
+
+    # remove unexpressed barcodes
+    mat <- mat[rowSums(mat) > 0, ]
+    # long format
+    mat_df <- mat %>% as.matrix %>% reshape2::melt() 
+    colnames(mat_df) <- c("barcode", "cell_barcode", "counts")
+    
+    # filter unexpressed counts (long format this time)
+    mat_df <- mat_df %>% filter(counts > 0) %>% 
+      group_by(cell_barcode) %>% 
+      # barcodes with maximum expression
+      summarize(n_active_bar = length(unique(barcode)), barcode = barcode[which.max(counts)] )
+    
+    mat_df <- mat_df %>% 
+      mutate(real_bc14 = substr(barcode,19 + 1,14 + 19 ), 
+             real_bc30 = substr(barcode,4+14+19+1,30 + 4+14+19)) %>% 
+      mutate(real_bc44 = paste0(real_bc14, real_bc30)) %>% 
+      select(-barcode) 
+   
+    
+    return(mat_df %>% as_tibble)
+
+
+}
+
+
+
+retrieve_multi_barcode <- function(mat, filter_uni = TRUE){
+
+    mat <- mat[rowSums(mat) > 0, ]
+    mat_df <- mat %>% as.matrix %>% reshape2::melt() 
+    colnames(mat_df) <- c("barcode", "cell_barcode", "counts")
+    
+    # Get the number of expressed barcodes for each cell
+    mat_df <- mat_df %>% filter(counts > 0) %>% 
+      group_by(cell_barcode) %>% 
+      mutate(n_active_bar = length(unique(barcode)))
+    # reconsrtuct the barcode
+    mat_df <- mat_df %>% 
+      mutate(real_bc14 = substr(barcode,1,14), real_bc30 = substr(barcode,19,48)) %>% 
+      mutate(real_bc44 = paste0(real_bc14, real_bc30)) %>% select(-barcode) 
+    # return cells with multiple barcode expressed
+    if(filter_uni)
+      return(mat_df %>% as_tibble %>% filter(n_active_bar > 1 ))
+    return(mat_df %>% as_tibble)
+
+}
+```
+
+```{r}
+enriched_barcodes_tb <- lapply(enriched_barcodes, conver_to_tibble)
+```
+
+```{r}
+multi_bar <- lapply(enriched_barcodes, retrieve_multi_barcode, filter_uni = FALSE)
+multi_bar <- lapply(1:length(enriched_barcodes), function(i) {
+  multi_bar[[i]]$sample <- names(enriched_barcodes[i])
+  multi_bar[[i]]
+  })
+multi_bar <- multi_bar %>% do.call(rbind,.)
+```
+
+
+We plot the number of barcodes with multiple hits
+
+```{r}
+p1 <- multi_bar %>% ggplot(., aes(x = n_active_bar, fill = sample)) + geom_histogram(aes(y = stat(..density..))) + 
+  theme_bw() + facet_wrap(.~sample) + theme(legend.position = "none") + ggtitle("multi-hits barcodes distribution")+
+  scale_y_continuous(labels = scales::percent_format())
+
+
+p2 <- multi_bar %>% ggplot(., aes(x = counts, fill = sample)) + geom_histogram() + 
+  theme_bw() + facet_wrap(.~sample) + theme(legend.position = "none")+ ggtitle("barcode counts distribution")
+
+p3 <- multi_bar %>% filter(n_active_bar > 1) %>% group_by(sample, cell_barcode) %>% 
+  summarize(count_max = sort(counts,decreasing = T)[1] - sort(counts,decreasing = T)[2]) %>% ggplot(., aes(x = count_max, fill = sample)) + geom_histogram(aes(y = stat(..count..))) + 
+  theme_bw() + facet_wrap(.~sample) + theme(legend.position = "none") + ggtitle("multi-hits barcodes delta")
+
+p1
+
+```
+
+Here we analyze barcode correlations
+
+```{r}
+
+mat_multi <- multi_bar %>% filter(n_active_bar > 1) %>% mutate(cell_barcode_by_sample = paste0(cell_barcode, "_", sample)) %>%
+  select(cell_barcode_by_sample, real_bc44, counts) %>% unique() %>% reshape2::acast(cell_barcode_by_sample ~ real_bc44, fill = 0, value.var = "counts")
+
+corr_multi_bc <- cor(mat_multi)
+diag(corr_multi_bc) <- 0
+corr_multi_bc[upper.tri(corr_multi_bc)] <- 0
+
+pheatmap::pheatmap(corr_multi_bc, show_rownames = F, show_colnames = F, cluster_rows = F,cluster_cols = F)
+
+ks <- arrayInd(which((corr_multi_bc) > 0.9), dim(corr_multi_bc))
+
+high_corr <- data.frame(bc1 = rownames(corr_multi_bc)[ks[,1]],
+                        bc2 = colnames(corr_multi_bc)[ks[,2]],
+                        corr = corr_multi_bc[ks]
+                        )
+
+df_supp <- data.frame(bc1 = rownames(corr_multi_bc)[ks[,1]] %>% unique(),
+                        bc2 = colnames(corr_multi_bc)[ks[,2]] %>% unique(),
+                      bc1_median_expr = multi_bar %>% filter(real_bc44 %in% rownames(corr_multi_bc)[ks[,1]] ) %>%
+                          group_by(real_bc44) %>% summarize(median_expr = median(counts, na.rm = T)) %>% pull(median_expr),
+                        bc2_mean_expr = multi_bar %>% filter(real_bc44 %in% colnames(corr_multi_bc)[ks[,2]]) %>%
+                          group_by(real_bc44) %>% summarize(median_expr = median(counts, na.rm = T)) %>% pull(median_expr))
+
+high_corr <- inner_join(high_corr, df_supp)
+saveRDS(high_corr, "../intermediate_data/high_correlated_barcodes.rds")
+```
+
+# Now we merge all the barcodes 
+
+```{r}
+mat_bar_counts <- data.table::rbindlist(enriched_barcodes_tb, fill = TRUE)
+```
+
+```{r}
+seur_all_annot <- lapply(1:length(enriched_barcodes_tb), function(i) {
+    tmp <- enriched_barcodes_tb[[i]]$real_bc14
+    names(tmp) <- enriched_barcodes_tb[[i]]$cell_barcode
+    AddMetaData(seur_all[[i]], metadata = tmp,
+      col.name = 'bc14')
+
+})
+
+seur_all_annot <- lapply(1:length(enriched_barcodes_tb), function(i) {
+    tmp <- enriched_barcodes_tb[[i]]$real_bc30
+    names(tmp) <- enriched_barcodes_tb[[i]]$cell_barcode
+    AddMetaData(seur_all_annot[[i]], metadata = tmp,
+      col.name = 'bc30')
+
+})
+
+
+seur_all_annot <- lapply(1:length(enriched_barcodes_tb), function(i) {
+    tmp <- enriched_barcodes_tb[[i]]$real_bc44
+    names(tmp) <- enriched_barcodes_tb[[i]]$cell_barcode
+    AddMetaData(seur_all_annot[[i]], metadata = tmp,
+      col.name = 'bc44')
+
+})
+
+seur_all_annot <- lapply(1:length(enriched_barcodes_tb), function(i) {
+    tmp <- enriched_barcodes_tb[[i]]$n_active_bar > 1
+    names(tmp) <- enriched_barcodes_tb[[i]]$cell_barcode
+    AddMetaData(seur_all_annot[[i]], metadata = tmp,
+     col.name = 'is_multi_barcode')
+
+})
+
+
+```
+
+```{r}
+saveRDS(seur_all_annot, file = "../intermediate_data/seur_all_annot_MSS1.rds")
+```
+
+```{r}
+seur_all_annot <- readRDS("../intermediate_data/seur_all_annot_MSS1.rds")
+```
+
+## initial QC 
+
+```{r}
+
+plot_qc <- function(obj) {
+  
+  library(patchwork)
+  
+  obj[["percent.mt"]]  <- PercentageFeatureSet(obj, pattern = "^MT-")
+
+  
+  vln_plot <- VlnPlot(obj, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, )
+  scat_count_feat <- FeatureScatter(obj, "nCount_RNA", "nFeature_RNA", group.by = "orig.ident", pt.size = 0.2) + ggtitle("") 
+  scat_count_mt <-  FeatureScatter(obj, "nCount_RNA", "percent.mt", group.by = "orig.ident", pt.size = 0.2) + ggtitle("")
+  
+  fin_plot <- vln_plot / (scat_count_feat + scat_count_mt)
+  
+  return(fin_plot)
+  
+}
+
+```
+
+```{r}
+
+all_QC_plots <- lapply(seur_all_annot, plot_qc)
+pdf("QC_scRNA_seq_by_sample.pdf", width = 10,height = 12 )
+all_QC_plots
+dev.off()
+```
+
+
+
+## Merging  
+
+```{r}
+seur_merged <- merge(seur_all_annot[[1]], y = seur_all_annot[2:length(seur_all)], add.cell.ids = nms, project = "resistance_evolution")
+```
+
+```{r}
+tmp <- !is.na(seur_merged$bc44)
+names(tmp) <- colnames(seur_merged)
+
+seur_merged <- AddMetaData(seur_merged, metadata = tmp,
+      col.name = 'has_barcode')
+```
+
+```{r}
+seur_merged@meta.data %>% group_by(orig.ident) %>% summarize(perc_barcode = sum(has_barcode) / n())
+```
+
+```{r}
+saveRDS(seur_merged, file = "../intermediate_data/seur_merged_MSS1.rds")
+```
+
+## QC
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(DoubletFinder)
+
+```
+
+```{r}
+seur_merged <- readRDS("../intermediate_data/seur_merged_MSS1.rds")
+seur_merged[["percent.mt"]]  <- PercentageFeatureSet(seur_merged, pattern = "^MT-")
+```
+
+
+```{r}
+
+VlnPlot(seur_merged, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1) %>% ggsave(plot = ., "QC_scRNA_seq.png", device = "png",units = "px", width = 2400, height = 5000)
+```
+
+```{r}
+p_sc_1 = FeatureScatter(seur_merged, "nCount_RNA", "nFeature_RNA", group.by = "orig.ident", pt.size = 0.05) + ggtitle("") + 
+geom_hline(yintercept = c(1000, 10000), linetype = "dashed", color = "red") + geom_vline(xintercept = c(200000), linetype = "dashed", color = "red")
+p_sc_1 %>% ggsave(., filename = "feature_counts_vs_features.png",device = "png", units = "px", width = 2400, height = 1800)
+```
+
+```{r}
+p_sc_2 = FeatureScatter(seur_merged, "nFeature_RNA", "percent.mt", group.by = "orig.ident", pt.size = 0.2) + NoLegend() + ggtitle("") + 
+geom_vline(xintercept = c(1000, 10000), linetype = "dashed", color = "red") + geom_hline(yintercept = c(30), linetype = "dashed", color = "red")
+p_sc_2 %>% ggsave(., filename = "feature_features_vs_mt.png",device = "png", units = "px", width = 2400, height = 1800)
+```
+
+```{r}
+palette <- readRDS("../../../other_data/palette_enriched_100.rds")
+
+
+p_sc_3 = FeatureScatter(seur_merged, "nFeature_RNA", "percent.mt", group.by = "bc44", pt.size = 0.2)  + ggtitle("") + 
+geom_vline(xintercept = c(1000, 10000), linetype = "dashed", color = "red") + geom_hline(yintercept = c(30), linetype = "dashed", color = "red") +
+scale_color_manual(values = palette) + NoLegend()
+p_sc_3 %>% ggsave(., filename = "feature_features_vs_mt2.png",device = "png", units = "px", width = 1800, height = 1800)
+```
+
+```{r}
+FeatureScatter(seur_merged, "nCount_RNA", "nFeature_RNA", group.by = "orig.ident", pt.size = 0.2) + ggtitle("") + geom_hline(yintercept = 1000, linetype = "dashed", color = "red")
+FeatureScatter(seur_merged, "nCount_RNA", "percent.mt", group.by = "orig.ident", pt.size = 0.2) + ggtitle("")
+FeatureScatter(seur_merged, "nFeature_RNA", "percent.mt", group.by = "orig.ident", pt.size = 0.2) + ggtitle("")
+
+```
+
+```{r}
+VlnPlot(seur_merged, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 1, group.by = "batch_id") %>% ggsave(plot = ., "QC_scRNA_seq_batch.png", device = "png",units = "px", width =1500, height = 2500)
+```
+
+```{r}
+(VlnPlot(seur_merged, features = c("nFeature_RNA"), ncol = 1) + geom_hline(yintercept = 1000, linetype = "dashed", color = "red")+ NoLegend()) %>% ggsave(plot = ., "QC_scRNA_seq_batch_nFeat.png", device = "png",units = "px", width =2500, height = 2000)
+```
+
+```{r}
+(VlnPlot(seur_merged, features = c("percent.mt"), ncol = 1) + geom_hline(yintercept = 30, linetype = "dashed", color = "red") + NoLegend()) %>% ggsave(plot = ., "QC_scRNA_seq_batch_mt.png", device = "png",units = "px", width =2500, height = 2000)
+```
+
+```{r}
+seur_merged <- subset(seur_merged, subset = nFeature_RNA > 1000 & percent.mt < 25)
+```
+
+```{r}
+seur_merged
+```
+
+## Split doublet removal and re-merge
+
+```{r}
+seur_split <- SplitObject(seur_merged, split.by = "orig.ident")
+```
+
+
+```{r}
+
+calculate_doublet_rates <- function(obj) {
+  
+  obj <- NormalizeData(obj)
+  obj <- FindVariableFeatures(obj, selection.method = "vst", nfeatures = 2000)
+  obj <- ScaleData(obj)
+  obj <- RunPCA(obj)
+  obj <- RunUMAP(obj, dims = 1:25)
+  obj <- FindNeighbors(obj, dims = 1:25)
+  obj <- FindClusters(obj)
+
+  sweep.res.list <- paramSweep_v3(obj, PCs = 1:25, sct = FALSE, num.cores = 8)
+  sweep.stats <- summarizeSweep(sweep.res.list, GT = FALSE)
+  bcmvn <- find.pK(sweep.stats) 
+  
+  homotypic.prop <- modelHomotypic(obj$seurat_clusters)
+  nExp_poi <- round(0.023*nrow(obj@meta.data))
+  nExp_poi.adj <- round(nExp_poi*(1-homotypic.prop))
+  obj <- doubletFinder_v3(obj, nExp = nExp_poi.adj, PCs = 1:25, pK = as.numeric(bcmvn$pK[which.max(bcmvn$BCmetric)]), pN = 0.25)
+  colnames(obj@meta.data)[ncol(obj@meta.data)] <- "doublet_inference"
+  
+  return(obj)
+  
+}
+
+
+seur_split <- lapply(seur_split, calculate_doublet_rates)
+
+seur_merged <- merge(seur_split[[1]], y = seur_split[2:length(seur_split)], add.cell.ids = sapply(seur_split, function(x) x$orig.ident %>% unique()) %>% unname(), project = "resistance_evolution")
+
+
+```
+
+
+```{r}
+
+saveRDS(seur_merged, file = "../intermediate_data/seur_merged_MSS1.rds")
+```
+
+## Standard analysis
+
+```{r}
+seur_merged <- readRDS(file = "../intermediate_data/seur_merged_MSS1.rds")
+seur_merged <- subset(seur_merged, doublet_inference == "Singlet")
+seur_merged <- seur_merged[rowSums(seur_merged@assays$RNA@counts) > 20,]
+```
+
+
+```{r}
+
+seur_merged@meta.data %>% group_by(sample_id) %>% summarize(N_cells = n(), batch_id = unique(batch_id), median_UMI = median(nCount_RNA), median_genes = median(nFeature_RNA) %>% round) %>% readr::write_tsv(. , "QC_table.tsv")
+```
+
+```{r}
+seur_merged@meta.data %>% group_by(sample_id) %>% summarize(N_cells = n(), batch_id = unique(batch_id), median_UMI = median(nCount_RNA), median_genes = median(nFeature_RNA) %>% round) %>% ggplot(aes(N_cells)) + geom_histogram() + theme_bw() + xlab("") + ggtitle("# cells")
+```
+
+```{r}
+#seur_merged_norm <- SCTransform(seur_merged, method = "glmGamPoi", verbose = FALSE, ncells=5000)
+```
+
+
+
+
+```{r}
+reticulate::use_condaenv("magic", required = T)
+
+library(Rmagic)
+
+seur_split <- SplitObject(seur_merged, split.by = "orig.ident")
+
+seur_split_magic <- lapply(seur_split, function(x) {
+  x <- NormalizeData(x)
+  x <- ScaleData(x)
+  x <- magic(x)
+  return(x)
+} )
+
+```
+```{r}
+seur_merged <- merge(seur_split_magic[[1]], y = seur_split_magic[2:length(seur_split)], add.cell.ids = sapply(seur_split, function(x) x$orig.ident %>% unique()) %>% unname(), project = "resistance_evolution")
+
+```
+
+
+```{r}
+DefaultAssay(seur_merged) <- "MAGIC_RNA"
+
+seur_merged_norm <- seur_merged
+```
+
+```{r}
+seur_merged_norm <- ScaleData(seur_merged_norm, features = rownames(seur_merged_norm))
+```
+
+```{r}
+seur_merged_norm <- RunPCA(seur_merged_norm, verbose = FALSE, features = rownames(seur_merged_norm))
+```
+
+```{r}
+ElbowPlot(seur_merged_norm, ndims = 50)
+```
+
+```{r}
+seur_merged_norm <- RunUMAP(seur_merged_norm, dims = 1:40, verbose = FALSE)
+
+seur_merged_norm <- FindNeighbors(seur_merged_norm, dims = 1:40)
+seur_merged_norm <- FindClusters(seur_merged_norm, verbose = FALSE)
+```
+
+# We also do the standard analysis for the non-inputed RNA slot
+
+```{r}
+DefaultAssay(seur_merged_norm) <- "RNA"
+
+seur_merged_norm <- NormalizeData(seur_merged_norm, normalization.method = "LogNormalize", scale.factor = 10000)
+seur_merged_norm <- FindVariableFeatures(seur_merged_norm)
+seur_merged_norm <- ScaleData(seur_merged_norm)
+seur_merged_norm <- RunPCA(seur_merged_norm, verbose = FALSE)
+seur_merged_norm <- RunUMAP(seur_merged_norm, dims = 1:40, verbose = FALSE)
+
+seur_merged_norm <- FindNeighbors(seur_merged_norm, dims = 1:40)
+
+```
+
+
+
+```{r}
+DefaultAssay(seur_merged_norm) <- "MAGIC_RNA"
+
+DimPlot(seur_merged_norm, label = TRUE) + NoLegend()
+
+```
+
+
+
+
+```{r}
+DimPlot(seur_merged_norm, label = TRUE) + NoLegend()
+```
+
+```{r}
+DimPlot(seur_merged_norm,group.by = "sample_id") %>% ggsave(plot = ., "UMAP_scRNA_seq.png", device = "png",units = "px", width =3000, height = 2500)
+```
+
+```{r}
+DimPlot(seur_merged_norm,split.by = "sample_id", group.by = "sample_id") %>% ggsave(plot = ., "UMAP_scRNA_seq_batch.png", device = "png",units = "px", width =4500, height = 2500)
+```
+
+```{r}
+options(repr.plot.width=12, repr.plot.height=10)
+```
+
+```{r}
+DimPlot(seur_merged_norm,group.by = "has_barcode")
+```
+
+```{r}
+library(patchwork)
+
+DimPlot(seur_merged_norm,group.by = "sample_id") 
+```
+
+```{r}
+DimPlot(seur_merged_norm,group.by = "bc14")
+```
+
+```{r}
+DimPlot(seur_merged_norm,group.by = "bc44") + NoLegend()
+```
+
+```{r}
+seur_merged@meta.data 
+```
+
+```{r}
+meta <- seur_merged_norm@meta.data %>% tibble::rownames_to_column(var = "cell_name")
+```
+
+```{r}
+barcodes_per_sample <- meta %>% group_by(sample_id) %>% summarize(perc_barcodes = sum(has_barcode) / length(has_barcode) )
+```
+
+```{r}
+barcodes_per_sample %>% ggplot(., aes(reorder(sample_id, perc_barcodes), perc_barcodes)) + geom_col() + 
+xlab("") + ylab("%cells with barcode") +
+theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+barcodes_distribution <- meta %>% filter(has_barcode) %>% group_by(sample_id) %>%  
+mutate(nbarcodes = sum(has_barcode)) %>% ungroup() %>% group_by(sample_id, bc44) %>% 
+summarize(perc_barcodes = sum(has_barcode) / nbarcodes) %>% unique()
+```
+
+```{r}
+ seur_merged_norm %>% head()
+```
+
+```{r}
+barcodes_N <- meta %>% filter(has_barcode) %>% group_by(sample_id) %>%  
+summarize(nbarcodes = sum(has_barcode) ) 
+```
+
+```{r}
+barcodes_N %>% ggplot(., aes(x = reorder(sample_id, nbarcodes), y = nbarcodes  )) + geom_col() + 
+xlab("") + ylab("barcode_numbers") +
+theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + theme(legend.position = "None")
+```
+
+```{r}
+# plot it random color, sleect abudnace <1% grey
+
+barcodes_distribution %>% ggplot(., aes(x = reorder(sample_id, perc_barcodes), y = perc_barcodes, fill = bc44)) + geom_col() + 
+xlab("") + ylab("barcode_distribution") +
+theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + theme(legend.position = "None")
+```
+
+```{r}
+### separate usefullt information as drug, timescale, lineage
+
+meta_annot <- meta %>% mutate(stage = if_else(grepl("_2", sample_id), "expansion", "under_drug"), id_no_number = gsub("_[12]","",sample_id )) %>%
+tidyr::separate(id_no_number, into = c("drug1", "drug2"), sep = "_") %>% mutate(stage = if_else(sample_id == "PARENTAL_DMSO", "parental", stage),  
+                                                                         drug1 = if_else(sample_id == "PARENTAL_DMSO", "NA", drug1),
+                                                                         drug2 = if_else(sample_id == "PARENTAL_DMSO", "NA", drug2)) %>%
+mutate(drug1 = if_else(drug1 == "T", "Trametinib", drug1),
+      drug2 = if_else(drug1 == "T", "Trametinib", drug2)) %>% mutate(treatment_window = if_else(is.na(drug2) , "1st", "2nd") ) %>% 
+mutate(treatment_window = if_else(sample_id == "PARENTAL_DMSO","parental",treatment_window))
+
+meta_annot %>%  tail()
+```
+
+```{r}
+to_metadata_factory <- function(df) {
+    function(idx) {
+
+        tmp <- df[,idx]
+        names(tmp) <- df[,1]
+        return(tmp)
+    }
+}
+```
+
+```{r}
+meta_barc <- to_metadata_factory(meta_annot)
+```
+
+```{r}
+### add new metadata ###
+seur_merged_norm <- AddMetaData(seur_merged_norm, metadata = meta_barc("drug1"),
+      col.name = 'drug1')
+
+
+seur_merged_norm <- AddMetaData(seur_merged_norm, metadata = meta_barc("drug2"),
+      col.name = 'drug2')
+
+
+seur_merged_norm <- AddMetaData(seur_merged_norm, metadata = meta_barc("treatment_window"),
+      col.name = 'treatment_window')
+
+seur_merged_norm <- AddMetaData(seur_merged_norm, metadata = meta_barc("stage"),
+      col.name = 'stage')
+
+```
+
+```{r}
+meta_annot %>% filter(has_barcode) %>% group_by(drug1, drug2, stage,treatment_window) %>%  
+summarize(nbarcodes = sum(has_barcode)) %>% nrow()
+```
+
+```{r}
+# entropy of the barcodes
+
+barcodes_distribution_annot <- meta_annot %>% filter(has_barcode) %>% group_by(drug1, drug2, stage,treatment_window) %>%  
+mutate(nbarcodes = sum(has_barcode)) %>% ungroup() %>% group_by(drug1, drug2, stage,treatment_window, bc44) %>% 
+summarize(perc_barcodes = sum(has_barcode) / nbarcodes, counts = sum(has_barcode), nbarcodes = unique(nbarcodes)) %>% unique() %>% ungroup() %>%
+group_by(drug1, drug2, stage,treatment_window) %>%  
+mutate(shannon_index = sum(perc_barcodes * log(perc_barcodes)) , simpson_index = 1 - sum(perc_barcodes^2) ) %>% ungroup() %>% mutate(drug2 = gsub("Rep", "", drug2))
+```
+
+```{r}
+barcodes_distribution_annot %>%  filter(stage == "parental") %>%  select(drug1,drug2,stage,treatment_window, shannon_index) %>% pull(shannon_index) %>% unique()
+```
+
+```{r}
+### Shannon index plot
+
+
+p1 <- barcodes_distribution_annot %>%  filter(stage != "parental") %>%  select(drug1,drug2,stage,treatment_window, shannon_index) %>% unique() %>%
+ggplot(., aes(x = paste0(drug1, if_else(is.na(drug2),"", paste0("->", drug2))), y = shannon_index * - 1)) + geom_col() + 
+xlab("") + ylab("Shannon Entropy") + facet_grid(stage ~ treatment_window, scales = "free_x") +
+theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + theme(legend.position = "None") + geom_hline(yintercept = as.numeric(barcodes_distribution_annot %>%  filter(stage == "parental") %>% pull(shannon_index) %>% unique()) * -1, lty = 2, color = "red" )
+p1
+```
+
+```{r}
+p1 %>% ggsave(plot = ., "shannon_entropy_facet.png", device = "png",units = "px", width =2000, height = 1800)
+```
+
+```{r}
+p2 <- barcodes_distribution_annot %>%  filter(stage != "parental") %>% select(drug1,drug2,stage,treatment_window, simpson_index) %>% unique() %>%
+ggplot(., aes(x = paste0(drug1, if_else(is.na(drug2),"", paste0("->", drug2))), y = simpson_index %>% as.numeric)) + 
+geom_col() + 
+xlab("") + ylab("Simposon's Index") + facet_grid(stage ~ treatment_window, scales = "free_x") +
+theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + theme(legend.position = "None") + geom_hline(yintercept = as.numeric(barcodes_distribution_annot %>%  filter(stage == "parental") %>% pull(simpson_index) %>% unique()), lty = 2, color = "red" )
+p2
+```
+
+```{r}
+p2 %>% ggsave(plot = ., "simpsom_clone_facet.png", device = "png",units = "px", width =2000, height = 1800)
+```
+
+```{r}
+p3 <- barcodes_distribution_annot %>%  filter(stage != "parental") %>% group_by(drug1,drug2,stage,treatment_window) %>% summarize(p_max = max(perc_barcodes)) %>%
+ggplot(., aes(x = paste0(drug1, if_else(is.na(drug2),"", paste0("->", drug2))), y =p_max)) + 
+geom_col() + 
+xlab("") + ylab("%most abundant bc44") + facet_grid(stage ~ treatment_window, scales = "free_x") +
+theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + theme(legend.position = "None") + geom_hline(yintercept = as.numeric(barcodes_distribution_annot %>%  filter(stage == "parental") %>% pull(perc_barcodes) %>% max()), lty = 2, color = "red" )
+
+p3
+```
+
+```{r}
+p3 %>% ggsave(plot = ., "most_abundant_clone_facet.png", device = "png",units = "px", width =2000, height = 1800)
+```
+
+```{r}
+TH = 0.05
+
+p4 <- barcodes_distribution_annot %>%  filter(stage != "parental") %>% group_by(drug1,drug2,stage,treatment_window) %>% summarize(p_high = sum(perc_barcodes > TH)) %>%
+ggplot(., aes(x = paste0(drug1, if_else(is.na(drug2),"", paste0("->", drug2))), y =p_high)) + 
+geom_col() + 
+xlab("") + ylab("#bc44 > 0.05") + facet_grid(stage ~ treatment_window, scales = "free_x") +
+theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + theme(legend.position = "None") + geom_hline(yintercept = as.numeric(barcodes_distribution_annot %>%  filter(stage == "parental") %>% pull(perc_barcodes) %>% sum(. > TH)), lty = 2, color = "red" )
+p4
+```
+
+```{r}
+library(patchwork)
+
+p_information <- (p1 | p2) / (p3 | p4)
+
+p_information %>% ggsave(filename = "indexes_plot.png",plot = ., device = "png", width = 2200, height = 2000, units = "px", dpi = 300 )
+p_information
+```
+
+```{r}
+p_tw <- DimPlot(seur_merged_norm,group.by = "treatment_window") + ggtitle("Treatment window all samples")
+p_tw
+```
+
+```{r}
+p_stage <- DimPlot(seur_merged_norm,group.by = "stage") + ggtitle("Timepoint all samples")
+p_stage 
+```
+
+```{r}
+p_d1 <- DimPlot(seur_merged_norm,group.by = "drug1") + ggtitle("Drug1 all samples")
+p_d1
+```
+
+```{r}
+colnames(seur_merged_norm@meta.data)
+```
+
+```{r}
+p_ncounts <- FeaturePlot(seur_merged_norm,features  = "nCount_RNA") + ggtitle("#counts all samples")
+p_ncounts
+```
+
+```{r}
+p_d2 <- DimPlot(seur_merged_norm,group.by = "drug2") + ggtitle("Drug2 all samples")
+p_d2
+```
+
+```{r}
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+```
+
+```{r}
+seur_merged_norm <- CellCycleScoring(seur_merged_norm, s.features = s.genes, g2m.features = g2m.genes, set.ident = TRUE)
+```
+
+```{r}
+p_cc <- DimPlot(seur_merged_norm,group.by = "Phase")
+p_cc
+```
+
+```{r}
+p_bar <- seur_merged_norm@meta.data %>% group_by(stage) %>% mutate(N_st = n()) %>% ungroup %>% group_by(stage, Phase) %>% summarize(N = n()/ unique(N_st)) %>% ggplot(aes(x = stage, y = N, fill = Phase)) + geom_col() + theme_bw() + coord_flip() + ylab("%")
+p_bar
+```
+
+```{r}
+(p_cc + p_bar) %>% ggsave(filename = "cc_plot.png",plot = ., device = "png", width = 3600, height = 1500, units = "px", dpi = 300 )
+```
+
+```{r}
+# This is how we originally made the palette
+
+library(RColorBrewer)
+palette = c(
+"#6faad9",
+"#a8f33a",
+"#9445ec",
+"#5de34e",
+"#8125c4",
+"#deeb3c",
+"#412aaf",
+"#93d942",
+"#cf4ee7",
+"#41ab39",
+"#6c55e2",
+"#dbc639",
+"#3557ca",
+"#cce76b",
+"#9332ab",
+"#54e790",
+"#e43ebe",
+"#8ddf74",
+"#311872",
+"#8db131",
+"#8070e3",
+"#eaa637",
+"#5181ea",
+"#e5421d",
+"#58e3b6",
+"#b42a91",
+"#45ab6d",
+"#ed4590",
+"#528225",
+"#de73d9",
+"#9cde99",
+"#671f79",
+"#dbe487",
+"#b271dd",
+"#9fa447",
+"#5b50a7",
+"#e5802c",
+"#437bc5",
+"#c49e3d",
+"#283874",
+"#d45a32",
+"#61d8cf",
+"#e03841",
+"#6fc9e0",
+"#ef416f",
+"#427841",
+"#ba2a71",
+"#7fa76a",
+"#c42653",
+"#3b8a76",
+"#a32429",
+"#93c9ac",
+"#311646",
+"#d4e1ac",
+"#802562",
+"#e6c587",
+"#231d35",
+"#c7e1d6",
+"#3c102b",
+"#af6e1f",
+"#9591e6",
+"#3a5414",
+"#dc6aac",
+"#294a29",
+"#e8a4dd",
+"#212b1b",
+"#bc7fc2",
+"#766b27",
+"#954e99",
+"#a39e70",
+"#644478",
+"#bf8c56",
+"#132837",
+"#ec9376",
+"#3a4963",
+"#d6625f",
+"#2f5656",
+"#b45a37",
+"#536d95",
+"#812c1d",
+"#5a8b9b",
+"#8d2947",
+"#7a9787",
+"#c25774",
+"#676349",
+"#a498cd",
+"#7e4e21",
+"#d7c4dc",
+"#33181d",
+"#deaf9f",
+"#642845",
+"#a99c97",
+"#58221f",
+"#e58b9f",
+"#4d3921",
+"#9e6185",
+"#9f7562",
+"#694d5d",
+"#965752",
+"#a68597")
+```
+
+```{r}
+barcodes_distribution_annot %>% head()
+```
+
+```{r}
+col_vals = barcodes_distribution_annot %>%  group_by(bc44) %>% summarize(max_perc = max(perc_barcodes)) %>% arrange(-max_perc) 
+col_vals %>% head()
+```
+
+```{r}
+names(palette) <- col_vals$bc44[1:100]
+```
+
+```{r}
+p_bc44_umap <- DimPlot(seur_merged_norm,group.by = "bc44") + NoLegend() + scale_color_manual(values = palette) + ggtitle("BC44 all samples")
+p_bc44_umap
+```
+
+```{r}
+barcodes_distribution_annot$stage %>% table()
+```
+
+```{r}
+p_perc <- barcodes_distribution_annot %>%  group_by(drug1,drug2,stage,treatment_window) %>% filter(stage != "parental") %>% 
+ggplot(., aes(x = reorder(paste0(drug1, if_else(is.na(drug2),"", paste0("->", gsub("Rep", "",drug2)))),perc_barcodes), y = perc_barcodes, fill = reorder(bc44, -perc_barcodes))) + 
+geom_col() + scale_fill_manual(values = palette) +
+xlab("") + ylab("%bc44") + facet_grid(stage ~ treatment_window, scales = "free_x") +
+theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + theme(legend.position = "None") + ggtitle("top 100 barcodes distribution")
+p_perc
+```
+
+```{r}
+p_umap <- ( p_perc | p_bc44_umap) / ( p_d1 | p_d2) /  ( p_stage | p_tw)
+
+p_umap %>% ggsave(filename = "umap_plot.png",plot = ., device = "png", width = 3300, height = 4000, units = "px", dpi = 300 )
+```
+
+```{r}
+p_parent <- barcodes_distribution_annot %>%  group_by(drug1,drug2,stage,treatment_window) %>% filter(stage == "parental") %>% 
+ggplot(., aes(x = "DMSO", y = perc_barcodes, fill = reorder(bc44, -perc_barcodes))) + 
+geom_col() + scale_fill_manual(values = palette) +
+xlab("") + ylab("%bc44") + facet_grid(stage ~ treatment_window, scales = "free_x") +
+theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + theme(legend.position = "None") + ggtitle("top 50 barcodes distribution")
+p_parent
+```
+
+```{r}
+p_umap <- ( p_perc | p_bc44_umap | p_parent) + patchwork::plot_layout(widths = c(1,1,0.3))
+
+p_umap %>% ggsave(filename = "props_plot.png",plot = ., device = "png", width = 3300, height = 2000, units = "px", dpi = 300 )
+```
+
+```{r}
+saveRDS(seur_merged_norm, paste0(directory_intermediate, "seur_merged_norm_MSS1.rds"))
+```
+
+```{r}
+saveRDS(barcodes_distribution_annot, paste0(directory_intermediate, "barcodes_distribution_annot_MSS1.rds"))
+```
+
+```{r}
+saveRDS(palette, paste0(directory_intermediate, "palette_enriched_100.rds"))
+```
+

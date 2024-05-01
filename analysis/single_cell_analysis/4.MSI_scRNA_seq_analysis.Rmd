@@ -1,0 +1,392 @@
+---
+title: "scRNA-seq-AKT"
+author: "Salvatore Milite"
+date: "29/06/2023"
+output: html_document
+---
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(tidyverse)
+devtools::load_all("/home/salvatore.milite/work/r_packages/scUtils/")
+
+palette_bc_MSI <- readRDS("../tmp_data/palette_MSI.rds")
+```
+
+```{r}
+
+seur_merged <- readRDS("../tmp_data/seur_MSI.rds")
+
+seur_merged[["percent.mt"]] <- PercentageFeatureSet(seur_merged, pattern = "^MT-")
+
+
+plot <- FeatureScatter(seur_merged, feature1 = "percent.mt", feature2 = "nFeature_RNA") +  scale_y_log10()+ geom_vline(xintercept = 30, linetype = 2, color = "indianred", size = 1.5) + geom_hline(yintercept = 2800, linetype = 2, color = "indianred", size = 1.5)
+plot
+
+```
+
+
+
+
+```{r}
+seur_merged_filt <- subset(seur_merged, subset = nFeature_RNA > 2800 & percent.mt < 30)
+
+```
+
+
+```{r}
+nms <- seur_merged_filt@meta.data$orig.ident
+
+drug <- case_when(
+  
+  grepl("ERKi",nms) ~ "ERKi",
+  grepl("Oxaliplatin",nms) ~ "Oxaliplatin",
+  grepl("DMSO",nms) ~ "DMSO"
+)
+
+metadata1 <- data.frame(drug = drug, row.names = rownames(seur_merged_filt@meta.data))
+
+seur_merged_filt <- AddMetaData(seur_merged_filt, metadata = metadata1, col.name = "drug2")
+
+pre_treatment <- case_when(
+  
+  grepl("MPS1",nms) ~ "CENPE_MPS1",
+  grepl("CENPE",nms) ~ "CENPE",
+  TRUE ~ "None"
+)
+
+metadata2 <- data.frame(pre_treatment = pre_treatment, row.names = rownames(seur_merged_filt@meta.data))
+
+seur_merged_filt <- AddMetaData(seur_merged_filt, metadata = metadata2, col.name = "drug1")
+
+expansion <- case_when(
+  
+  grepl("Exp",nms) ~ "expansion",
+  grepl("DMSO",nms) ~ "DMSO",
+  TRUE~ "under_drug"
+  
+  )
+
+metadata3 <- data.frame(stage = expansion, row.names = rownames(seur_merged_filt@meta.data))
+
+seur_merged_filt <- AddMetaData(seur_merged_filt, metadata = metadata3, col.name = "stage")
+
+metadata4 <- data.frame(genotype = rep("MSI",nrow(seur_merged_filt@meta.data)), row.names = rownames(seur_merged_filt@meta.data))
+
+seur_merged_filt <- AddMetaData(seur_merged_filt, metadata = metadata4, col.name = "genotype")
+
+
+
+seur_merged_filt %>% saveRDS(., file = "../tmp_data/seur_MSI_filt.rds")
+
+```
+
+```{r}
+seur_merged_filt <- readRDS("/group/sottoriva/salvatore.milite/erica_sc_project/drug_experiment/tmp_data/seur_MSI_filt.rds")
+
+seur_merged_filt <- normalize_dim_red(seur_merged_filt, dims = 40)
+
+seur_merged_filt %>% saveRDS(., file = "/group/sottoriva/salvatore.milite/erica_sc_project/drug_experiment/tmp_data/seur_MSI_norm.rds")
+
+```
+
+```{r}
+
+seur_merged_norm <- readRDS("/group/sottoriva/salvatore.milite/erica_sc_project/drug_experiment/tmp_data/seur_MSI_norm.rds")
+```
+
+```{r}
+
+genes <- get_marker_colon_ephitelium()
+
+
+library(RColorBrewer)
+
+
+
+
+p1 <- SCpubr::do_DotPlot(seur_merged_norm[,grep("Exp",seur_merged_norm$orig.ident, invert = T)], group.by = "orig.ident",
+                         features = genes, cluster = T,scale = T,use_viridis = F,
+                         plot.title = "Maker genes expression in MSI samples Under Drug", 
+                         sequential.palette = "Blues", sequential.direction = 1) 
+
+p2 <- SCpubr::do_DotPlot(seur_merged_norm[,grep("Exp",seur_merged_norm$orig.ident)], group.by = "orig.ident",
+                         features = genes, cluster = T,scale = T,use_viridis = F,
+                         plot.title = "Maker genes expression in MSI samples Expansion", 
+                         sequential.palette = "Blues", sequential.direction = 1) 
+
+
+(p1 / p2) %>% ggsave(filename = "../plots/scRNA_seq/marker_genes_expression_MSI.png",width = 12, height = 9 , scale = 1.5)
+
+
+```
+
+
+```{r}
+p_markers_all <- SCpubr::do_FeaturePlot(seur_merged_norm, features = genes %>% do.call( c,.), ncol = 6)
+
+p_markers_all %>% ggsave(filename = "../plots/scRNA_seq/marker_genes_UMAP_MSI.png",width = 15, height = 12 , scale = 2)
+```
+
+
+# Differential Expression 
+
+```{r}
+
+
+p1 <- SCpubr::do_DimPlot(seur_merged_norm, reduction = "umap", group.by = "drug1")  + ggtitle("") + scale_color_brewer("", palette = "Set1")
+p2 <- SCpubr::do_DimPlot(seur_merged_norm, group.by = "drug2") + scale_color_brewer("", palette = "Set2") + ggtitle("")
+p3 <-  SCpubr::do_DimPlot(seur_merged_norm, group.by = "bc44", shuffle = T) + scale_color_manual("", values = palette_bc_MSI) + ggtitle("Barcodes distribution") +
+  Seurat::NoLegend()
+p4 <-  SCpubr::do_DimPlot(seur_merged_norm, group.by = "stage") + scale_color_brewer("", palette = "Dark2") + ggtitle("")
+
+
+p_summary <- (p1 + p2) / (p3 + p4)
+
+ggsave("../plots/scRNA_seq/summary_MSI.png", p_summary, width = 12, height = 9, scale = 1.5)
+
+```
+
+
+### Basic Differential Expression ###
+
+```{r}
+seur_merged_norm <- readRDS("/group/sottoriva/salvatore.milite/erica_sc_project/drug_experiment/tmp_data/seur_MSI_norm.rds")
+
+```
+
+```{r}
+reticulate::use_condaenv("scdeepaa", required = T)
+sys <- reticulate::import("sys")
+sys$path <- c(sys$path, "/home/salvatore.milite/work/python_packages/scDeepAA_paper_javi/src/")
+
+scdeepaa <- reticulate::import("scdeepaa")
+  
+
+
+var_under <- FindVariableFeatures(subset(seur_merged_norm, stage == "under_drug" & drug2 != "DMSO"), assay = "RNA", nfeatures = 2000, selection.method = "vst")@assays$RNA@var.features
+var_exp <- FindVariableFeatures(subset(seur_merged_norm, stage == "expansion" & drug2 != "DMSO"), assay = "RNA", nfeatures = 1000, selection.method = "vst")@assays$RNA@var.features
+var_DMSO <- FindVariableFeatures(subset(seur_merged_norm, drug2 == "DMSO"), assay = "RNA", nfeatures = 500, selection.method = "vst")@assays$RNA@var.features
+
+
+all_var = c(var_under, var_exp, var_DMSO) %>% unique()
+
+all_var %>%  saveRDS("/group/sottoriva/salvatore.milite/erica_sc_project/drug_experiment/tmp_data/variable_genes_AA_MSI.rds")
+
+seur_merged_filt_AA <- ScaleData(seur_merged_norm, features = all_var, assay = "RNA")
+
+input_matrix <- seur_merged_filt_AA@assays$RNA@scale.data %>% as.matrix() %>% t()
+#input_matrix <- seur_merged_norm@reductions$pca@cell.embeddings
+input_matrix %>% saveRDS("../tmp_data/input_matrix_AA_MSI.rds")
+
+rm(seur_merged_filt_AA)
+
+```
+
+```{python}
+
+import importlib
+import scdeepaa as aa
+import numpy as np
+
+MULT = 3
+
+all_arcs = {}
+
+for i in range(2,15):
+
+    res = aa.fit_deepAA(
+        [r.input_matrix],
+        [np.ones(r.input_matrix.shape[0])],
+        ["G"],
+        hidden_dims_dec_common = [16 * MULT,32 * MULT,64 * MULT],
+        hidden_dims_dec_last = [64 * MULT],
+        hidden_dims_enc_ind = [64 * MULT, 64 * MULT],
+        hidden_dims_enc_common = [32 * MULT],
+        hidden_dims_enc_pre_Z = [16 * MULT],
+        lr = 0.01,
+        gamma_lr = 1,
+        steps = 500,
+        narchetypes = i,
+        batch_size= 50000, 
+        Z_fix_norm= 1e9,
+        fix_Z = True
+        )
+    all_arcs[i] = res
+  
+
+
+```
+
+
+
+```{python}
+
+
+import matplotlib.pyplot as plt
+
+plt.clf()
+
+aa.plot_ELBO_across_runs(all_arcs, warmup = 480)
+```
+
+```{python}
+import pickle 
+import torch
+
+
+import pickle 
+
+
+def save_object(obj, filename):
+    with open(filename, 'wb') as outp:  # Overwrites any existing file.
+        pickle.dump(obj, outp, pickle.HIGHEST_PROTOCOL)
+torch.save(all_arcs[8]["deepAA_obj"].state_dict(),  "../tmp_data/final_inference_RNA_MSI_state_dict.pkl")
+
+save_object({k:v for k,v in all_arcs[8].items() if k != "deepAA_obj"}, "../tmp_data/final_inference_RNA_MSI.pkl")
+
+
+save_object({k:v["ELBO"] for k,v in all_arcs.items()}, "../tmp_data/all_arcs_inference_RNA_MSI.pkl")
+
+```
+
+```{r}
+library(reticulate)
+
+deepAA_final <- py$all_arcs[[7]]
+
+saveRDS(deepAA_final, "../tmp_data/final_inference_RNA_MSI.rds")
+
+```
+
+```{r}
+library(reticulate)
+library(matrixStats)
+library(Matrix)
+library(tidyr)
+library(tibble)
+library(patchwork)
+
+deepAA_final <- readRDS("../tmp_data/final_inference_RNA_MSI.rds")
+
+model_params <- deepAA_final$inferred_quantities
+
+B <- model_params$B %>% t()
+
+
+weights <- model_params$A
+
+
+colnames(weights) <- paste0("arch", 1:ncol(weights))
+rownames(weights) <- colnames(seur_merged_norm)
+meta_old <- seur_merged_norm@meta.data
+seur_merged_norm@meta.data <- meta_old %>% select(-starts_with("arch"))
+seur_merged_norm@meta.data <- cbind(seur_merged_norm@meta.data, weights[rownames(seur_merged_norm@meta.data),])
+
+fp <- FeaturePlot(seur_merged_norm, paste0("arch", 1:ncol(weights)), max.cutoff = "q99", raster = F) & ggplot2::scale_color_viridis_b()
+
+arch_table_by_geno <- seur_merged_norm@meta.data %>% filter(!is.na(bc44)) %>%
+  rownames_to_column("key") %>% dplyr::select(key,drug2, stage,drug1, bc44, starts_with("arch")) %>% pivot_longer(starts_with("arch"), names_to = "archs", values_to = "weights") %>% dplyr::group_by(drug2, drug1, stage, bc44, across(starts_with("arch"))) %>% dplyr::mutate(avg_prob = mean(weights)) 
+
+arch_table_by_drug <- seur_merged_norm@meta.data  %>%
+  rownames_to_column("key") %>% dplyr::select(key,drug2,drug1, stage, starts_with("arch")) %>% 
+  pivot_longer(starts_with("arch"), names_to = "archs", values_to = "weights") %>% dplyr::group_by(drug2, drug1, stage, across(starts_with("arch"))) %>% dplyr::mutate(avg_prob = mean(weights)) 
+
+min_n <- 50
+fp %>% ggsave(filename = "../plots/scRNA_seq/archetypes_MSI_fp.png",width = 8, height = 10 , scale = 1.5)
+
+ 
+arch_table_by_geno %>% saveRDS(., "data/arch_table_by_geno_MSI_batch2_RNA.rds")
+arch_table_by_drug %>% saveRDS(., "data/arch_table_by_drug_MSI_batch2_RNA.rds")
+
+```
+
+
+```{r}
+palette_archs <- RColorBrewer::brewer.pal(length(arch_table_by_geno$archs %>% unique), "Set3")
+
+make_colorfull_labels <- function(bc,palette){
+  library(dplyr)
+  to_add_bc <- setdiff(bc, names(palette))
+  to_add <- rep("grey50", length(to_add_bc))
+  names(to_add) <- to_add_bc
+  palette <- c(palette, to_add)
+  axis_to_add <- sapply(bc, FUN = function(b) glue::glue("<span style='color:{palette[b]};'>barcode </span> ")) 
+    
+  return(axis_to_add %>%  as.character())
+}
+
+treats_1 <- seur_merged_norm$drug1 %>% unique()
+
+p1 <- lapply(treats_1,function(i) {
+   library(ggtext)
+  high_freq_bc <- arch_table_by_geno %>% ungroup() %>% filter(drug1 == !!i) %>% pull(bc44) %>% table()
+  high_freq_bc <- names(high_freq_bc[high_freq_bc > min_n])
+  
+  
+   double_bc <- arch_table_by_geno %>% ungroup() %>%  dplyr::filter(drug1 == !!i) %>% 
+     dplyr::select(bc44, drug2, stage) %>%  unique() %>% pull(bc44) %>% table()
+  double_bc <- names(double_bc[double_bc > 2])
+  
+  df_plot <- arch_table_by_geno  %>% ungroup() %>% dplyr::filter(drug1 == !!i) %>%  
+    dplyr::filter(bc44 %in% high_freq_bc, bc44 %in% names(palette_bc_MSI[palette_bc_MSI != "darkgrey"])) %>% 
+               dplyr::group_by(bc44 ,stage, drug2) %>% dplyr::mutate(N = length(unique(key)), group = paste0(drug2,"_",stage)) %>% ungroup() 
+  
+  df_plot$group <- factor(x = df_plot$group, levels = 
+                            c(
+                              "DMSO_expansion",
+                              "Oxaliplatin_under_drug",
+                              "Oxaliplatin_expansion",
+                              "ERKi_under_drug",
+                              "ERKi_expansion"
+                              )
+  )
+  ggplot( df_plot %>% select(-key, -weights) %>% unique() , aes(x =group , y = avg_prob, fill = archs )) + 
+    geom_col() + theme_bw() + labs(xlab = "%") + facet_wrap( . ~ make_colorfull_labels(bc44, palette_bc_MSI), scales = "free") + RotatedAxis()   + scale_fill_manual("Archs", values  = palette_archs) + scale_x_discrete(labels = c(
+                            "DMSO",
+                            "Oxaliplatin_under-drug",
+                            "Oxaliplatin_re-growth",
+                            "ERKi_under-drug",
+                            "ERKi_expansion"
+                          ))+
+    theme(  strip.text = element_markdown(family = "Arial", size = 12) ) 
+  })
+
+lapply(1:length(treats_1), function(i) {
+  p1[[i]] %>% ggsave(filename = glue::glue("../plots/scRNA_seq/archetypes_MSI_by_barcode_{treats_1[[i]]}.png"),width = 9, height = 15 , scale = 1.)
+})
+  
+```
+
+
+```{r}
+palette_archs <- RColorBrewer::brewer.pal(length(arch_table_by_geno$archs %>% unique), "Set3")
+
+p2 <- ggplot(arch_table_by_drug %>% group_by(stage , drug2, drug1) %>% mutate(N = length(unique(key)), group = paste0(stage, " (", N ,")") ) %>% ungroup() %>% 
+                 select(-key, -weights) %>% unique() %>% filter(N > min_n) , aes(x = fct_rev(group) , y = avg_prob, fill = archs )) + 
+    geom_col() + theme_bw() + labs(xlab = "%") + facet_wrap( drug1 ~ drug2, scales = "free") + RotatedAxis()   + scale_fill_manual("Archs", values  = palette_archs)
+
+p2 %>% ggsave(filename = "../plots/scRNA_seq/archetypes_MSI_by_tratment.png",width = 8, height = 10 , scale = 1.5)
+```
+
+```{r}
+genes <- get_marker_colon_ephitelium()
+
+
+library(RColorBrewer)
+
+seurat_archetypes <- CreateSeuratObject((model_params$B %*% t(seur_merged_norm@assays$RNA@data %>% as.matrix) )   %>% t())
+
+seurat_archetypes@meta.data$aa_group <- paste0("arch", 1:nrow(seurat_archetypes@meta.data))
+
+
+panel_g <- SCpubr::do_DotPlot(sample = seurat_archetypes, group.by = "aa_group",
+                         features = genes, cluster = T,scale = T,use_viridis = F,assay = "RNA",
+                         plot.title = "Maker genes expression in RNA archetypes MSI", sequential.palette = "Blues", sequential.direction = 1, flip = T)  + theme(text=element_text(size=12 + 3,  family="Arial"),  plot.title = element_text(hjust = 0.5))
+
+
+panel_g %>% ggsave(filename = "../plots/scRNA_seq/cell_markers_by_archetypes_MSI.png",width = 8, height = 10 , scale = 1.5)
+
+```
+

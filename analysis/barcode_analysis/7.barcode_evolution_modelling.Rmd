@@ -1,0 +1,320 @@
+---
+title: "barcode_evolution_modelling"
+author: "Salvatore Milite"
+date: "22/11/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(ggplot2)
+```
+
+```{r}
+
+
+all_barcodes <- data.table::fread("../javi_sc_floating_barcodes/final_results/all_barcodes_countd_annotated.tsv.gz")
+
+all_barcodes <- all_barcodes %>% mutate(sample = paste0(drug1, if_else(is.na(drug2) | drug2 == "", "", paste0("->", drug2 )) ) ) %>%
+  mutate(stage = case_when(
+        
+        grepl("Trametinib->",sample) & (days >126) ~ "Expansion", 
+        grepl("->Trametinib", sample) & (days > 126) ~ "Expansion",
+        !grepl("->", sample) & (days > 47) ~ "Expansion",
+        TRUE ~ "Under_drug"
+        ))
+
+all_barcodes <- all_barcodes %>% filter(!(days > 50 & days < 60))
+abundances <- all_barcodes %>% group_by(real_bc44, sample, rep) %>% summarize(avg_perc = mean(perc), max_perc = mean(perc), min_perc = min(perc))
+all_barcodes_Trametinib <- all_barcodes %>% filter(drug1 == "KU" & drug2 == "", rep == 2)
+
+```
+
+
+```{r}
+library(patchwork)
+
+palette <- readRDS("../javi_sc_rna_seq/intermediate_results/palette_enriched_100.rds")
+
+top_3 <- all_barcodes_Trametinib %>% filter(days == max(days)) %>% top_n(.,3, wt = perc) %>% pull(real_bc44)
+
+all_barcodes_Trametinib$stage <- factor(all_barcodes_Trametinib$stage,levels = c("Under_drug", "Expansion"))
+
+p1 <- ggplot(all_barcodes_Trametinib %>% filter(real_bc44 %in% top_3), (aes(x = days, y = log(perc), color = real_bc44))) + geom_point() + geom_smooth(formula = y ~ poly(x,1), method = "lm") + theme_bw() + facet_wrap(.~ stage, nrow = 1, scales = "free_x") + scale_color_manual("barcode", values = palette) + theme(legend.position = "none") + ylab("log(%)")
+
+p2 <- ggplot(all_barcodes_Trametinib %>% filter(real_bc44 %in% top_3), (aes(x = days, y = log(perc), color = real_bc44))) + geom_point() + geom_smooth(formula = y ~ poly(x,4), method = "lm") + theme_bw() + facet_wrap(.~ stage, nrow = 1, scales = "free_x") + scale_color_manual("barcode", values = palette) + theme(legend.position = "none") + ylab("log(%)")
+
+p1 / p2
+
+```
+
+```{r}
+
+fit_linear_model <- function(x, sample,reps = paste0(1:3), min_days = 3, type = 1, poly_order = 4) {
+    library(dplyr)
+    res <- lapply(reps, function(rp) fit_linear_model_aux(x,sample, rp, min_days, type , poly_order)) %>% do.call(rbind,.)
+    res %>% return(.)
+}
+
+fit_linear_model_aux <- function(x, sample,rep, min_days = 2, type = 1, poly_order = 4){ 
+
+  library(dplyr)
+
+  x_filt <-  x %>% filter(sample == !!sample, rep == !!rep) 
+  x_filt_df <- x_filt %>% select(days,perc,real_bc44)
+  x_filt_df <- split(x_filt_df, f = x_filt_df$real_bc44)
+  idx_high <- sapply(x_filt_df,function(df) nrow(df) >= min_days) 
+  if(length(x_filt_df) < 1) return(NULL)
+  x_filt_df_h <- x_filt_df[idx_high] 
+  if(length(x_filt_df_h) < 1) return(NULL)
+  ret <- lapply(1:length(x_filt_df_h), function(i) fit_growth_rate(x_filt_df_h[[i]], names(x_filt_df_h)[i], type = type, poly_order = poly_order))
+  ret_df <- do.call(rbind, ret)
+  return(ret_df %>% mutate(sample = sample, rep = as.character(rep)))
+}
+
+fit_growth_rate <- function(df,barcode, type = 1, poly_order = 4) {
+    library(RcppEigen)
+    if(nrow(df) == 2 ){
+      df <- df %>% arrange(days)
+      days <- df$days
+      perc <- log(df$perc)
+      perc <- perc - log(min(df$perc))
+      return(data.frame(
+                      intercept = (perc[1] - perc[2]) / (days[2] - days[1]),
+                      growth_rate = log(min(df$perc)),
+                      p_value = 0,
+                      real_bc44 = barcode))
+    }
+  
+    if(type != 1){
+      lm_res <- fastLm(log(perc)~poly(days, poly_order), data = df)
+      ret <- data.frame(growth_rate = summary(lm_res)$coefficients[1:(poly_order + 1),1],
+                      p_value = summary(lm_res)$coefficients[1:(poly_order + 1),4],
+                      real_bc44 = barcode)
+      ret$power <-  0:poly_order
+      return(ret)
+    } else {
+      lm_res <- fastLm(log(perc)~days, data = df)
+      return(data.frame(
+                      intercept = summary(lm_res)$coefficients[1,1],
+                      growth_rate = summary(lm_res)$coefficients[2,1],
+                      p_value = summary(lm_res)$coefficients[2,4],
+                      real_bc44 = barcode))
+    }
+    
+}
+
+```
+
+
+### Against main fitness
+
+```{r}
+res_exp <- lapply(unique(all_barcodes$sample), function(sn) fit_linear_model(all_barcodes %>% filter(stage == "Expansion"), sn)) %>% 
+              do.call(rbind,.)
+
+res_under_linear <- lapply(unique(all_barcodes$sample), function(sn) fit_linear_model(all_barcodes %>% filter(stage == "Under_drug"), sn, min_days = 2) ) %>% 
+              do.call(rbind,.)
+
+res_all_linear <- lapply(unique(all_barcodes$sample), function(sn) fit_linear_model(all_barcodes, sn, min_days = 5)) %>% 
+              do.call(rbind,.)
+```
+
+```{r}
+res_under <- lapply(unique(all_barcodes$sample), function(sn) fit_linear_model(all_barcodes %>% filter(stage == "Under_drug"), sn, type = 2, min_days = 12)) %>% 
+              do.call(rbind,.) %>% as_tibble()
+
+res_under_prime_1 <- res_under %>% filter(power > 0) %>% mutate(growth_rate = growth_rate * power) %>% mutate(power = power - 1)
+
+res_under_prime_2 <- res_under_prime_1 %>% filter(power > 0) %>% mutate(growth_rate = growth_rate * power) %>% mutate(power = power - 1)
+
+```
+
+```{r}
+
+minima_max <- res_under_prime_1 %>% group_by(real_bc44, sample, rep) %>% summarize(zeros = Re(polyroot(growth_rate))[abs(Im(polyroot(growth_rate))) < 1e-6])
+
+T_int <-all_barcodes %>%  group_by(sample, rep) %>% summarize(T_min = min(days), T_max = max(days))
+
+minima_max_time <- inner_join(T_int, minima_max %>% mutate(rep = as.numeric(rep)))
+
+minima_max_time <- minima_max_time %>% mutate(valid_solution = if_else(zeros > T_min & zeros < T_max, T, F) )
+
+second_der_min_max <- function(root, real_bc44, sample, rep) {
+  df_w <- res_under_prime_2 %>% filter(real_bc44 == !!real_bc44, rep == !!rep, sample == !!sample) 
+  return(sum(df_w$growth_rate**df_w$power * root))
+}
+
+second_der_min_max <- Vectorize(second_der_min_max)
+
+minima_max_time <- minima_max_time %>% filter(valid_solution)
+
+minima_max_time$second_der <- second_der_min_max(minima_max_time$zeros, minima_max_time$real_bc44,
+                                                 minima_max_time$sample, minima_max_time$rep)
+
+
+
+to_save <- list(res_exp = res_exp, res_under_linear = res_under_linear,  res_under_poly = res_under, minima_max_time = minima_max_time,res_all_linear = res_all_linear,
+                abuandances = abundances)
+
+saveRDS(to_save, file = "../javi_sc_floating_barcodes/int_results/growth_modelling_absolute_fitness.rds")
+```
+
+### Against most abundant barcode
+
+```{r}
+reference_bar <- all_barcodes %>% group_by(sample) %>% filter(days >= max(days)) %>% summarize(ref_barcode = real_bc44[which.max(perc)]) 
+
+all_barcodes_ref <- left_join(all_barcodes, reference_bar)
+
+all_barcodes_ref <- all_barcodes_ref %>% filter(real_bc44 == ref_barcode) %>% select(sample_id,perc,ref_barcode) %>%
+  rename(ref_perc = perc)
+
+all_barcodes <- inner_join(all_barcodes, all_barcodes_ref)
+
+
+all_barcodes <- all_barcodes %>% mutate(perc = perc / ref_perc)
+
+all_barcodes <- all_barcodes %>% filter(!is.na(perc))
+
+res_exp <- lapply(unique(all_barcodes$sample), function(sn) fit_linear_model(all_barcodes %>% filter(stage == "Expansion"), sn)) %>% 
+              do.call(rbind,.)
+
+res_under_linear <- lapply(unique(all_barcodes$sample), function(sn) fit_linear_model(all_barcodes %>% filter(stage == "Under_drug"), sn,min_days = 2)) %>% 
+              do.call(rbind,.)
+
+res_all_linear <- lapply(unique(all_barcodes$sample), function(sn) fit_linear_model(all_barcodes, sn, min_days = 5)) %>% 
+              do.call(rbind,.)
+```
+
+```{r}
+res_under <- lapply(unique(all_barcodes$sample), function(sn) fit_linear_model(all_barcodes %>% filter(stage == "Under_drug"), sn, type = 2, min_days = 12)) %>% 
+              do.call(rbind,.) %>% as_tibble()
+
+res_under_prime_1 <- res_under %>% filter(power > 0) %>% mutate(growth_rate = growth_rate * power) %>% mutate(power = power - 1)
+
+res_under_prime_2 <- res_under_prime_1 %>% filter(power > 0) %>% mutate(growth_rate = growth_rate * power) %>% mutate(power = power - 1)
+
+```
+
+```{r}
+
+minima_max <- res_under_prime_1 %>% group_by(real_bc44, sample, rep) %>% summarize(zeros = Re(polyroot(growth_rate))[abs(Im(polyroot(growth_rate))) < 1e-6])
+
+T_int <-all_barcodes %>%  group_by(sample, rep) %>% summarize(T_min = min(days), T_max = max(days))
+
+minima_max_time <- inner_join(T_int, minima_max %>% mutate(rep = as.numeric(rep)))
+
+minima_max_time <- minima_max_time %>% mutate(valid_solution = if_else(zeros > T_min & zeros < T_max, T, F) )
+
+second_der_min_max <- function(root, real_bc44, sample, rep) {
+  df_w <- res_under_prime_2 %>% filter(real_bc44 == !!real_bc44, rep == !!rep, sample == !!sample) 
+  return(sum(df_w$growth_rate**df_w$power * root))
+}
+
+second_der_min_max <- Vectorize(second_der_min_max)
+
+minima_max_time <- minima_max_time %>% filter(valid_solution)
+
+minima_max_time$second_der <- second_der_min_max(minima_max_time$zeros, minima_max_time$real_bc44,
+                                                 minima_max_time$sample, minima_max_time$rep)
+
+
+
+to_save <- list(res_exp = res_exp, res_under_linear = res_under_linear,  res_under_poly = res_under, minima_max_time = minima_max_time,res_all_linear = res_all_linear,
+                abuandances = abundances)
+
+saveRDS(to_save, file = "../javi_sc_floating_barcodes/int_results/growth_modelling_relative_fitness.rds")
+```
+
+```{r}
+plot_barcode <- function(df, bc44, rep, sample){
+ 
+  library(ggplot2)
+  library(patchwork)
+   
+  df$stage <- factor(df$stage,levels = c("Under_drug", "Expansion"))
+
+  
+  p1 <- ggplot(df %>% filter(real_bc44 %in% !!bc44, sample == !!sample, rep == !!rep), (aes(x = days, y = log(perc), color = real_bc44))) + geom_point() + geom_smooth(formula = y ~ poly(x,1), method = "lm") + theme_bw() + facet_wrap(.~ stage, nrow = 1, scales = "free_x") + scale_color_manual("barcode", values = palette) + theme(legend.position = "none") + ylab("log(%)")
+
+p2 <- ggplot(df %>% filter(real_bc44 %in% !!bc44, sample == !!sample, rep == !!rep), (aes(x = days, y = log(perc), color = real_bc44))) + geom_point() + geom_smooth(formula = y ~ poly(x,4), method = "lm") + theme_bw() + facet_wrap(.~ stage, nrow = 1, scales = "free_x") + scale_color_manual("barcode", values = palette) + theme(legend.position = "none") + ylab("log(%)")
+
+return(p1 / p2)
+
+  
+}
+```
+
+```{r}
+
+plot_barcode(all_barcodes,"TGATCTCCCATAATTGCATGTGGTCAACGTACGTACTGACTGTG", 3, "Trametinib->MK")
+
+```
+
+
+```{r}
+scRNA_seq <- readRDS("../javi_sc_rna_seq/intermediate_results/seur_merged_norm.rds")
+```
+
+```{r}
+library(Seurat)
+library(Matrix)
+library(fgsea)
+library(msigdbr)
+
+
+scRNA_seq_tram <- subset(scRNA_seq,orig.ident == "Trametinib_1")
+
+
+tram_gr <- res_under_linear %>% filter(sample == "Trametinib") %>% group_by(rep, real_bc44) %>% summarise(gr = mean(growth_rate))
+
+scRNA_seq_tram_pseudo <- AggregateExpression(scRNA_seq_tram, assays = "RNA", group.by = "bc44", return.seurat = T)
+
+tram_gr_filt <- tram_gr %>% filter(real_bc44 %in% colnames(scRNA_seq_tram_pseudo$RNA))
+
+scRNA_seq_tram_pseudo <- NormalizeData(scRNA_seq_tram_pseudo) %>% FindVariableFeatures() %>% ScaleData() %>% RunPCA()
+
+bbcor <- cor(as.matrix(tram_gr_filt$gr),scRNA_seq_tram_pseudo@assays$RNA@data[,tram_gr_filt$real_bc44] %>% as.matrix() %>% t(), method = "pearson") %>% t()
+
+m_df<- msigdbr(species = "Homo sapiens", category = "H") %>% split(x = .$gene_symbol, f = .$gs_name)
+
+bbcor <- bbcor %>% as.data.frame() %>% filter(!is.na(V1)) %>% arrange(-V1)
+
+input_gsea <- bbcor$V1
+names(input_gsea) <- rownames(bbcor)
+
+fgseaRes<- fgsea(m_df, stats =input_gsea)
+
+fgseaResTidy <- fgseaRes %>%
+  as_tibble() %>%
+  arrange(desc(NES))
+
+p1 <- ggplot(fgseaResTidy %>% filter(padj < 0.05) %>% head(n= 20), aes(reorder(gsub("HALLMARK_", "",pathway), NES), NES)) +
+  geom_col(aes(fill = NES > 0)) +
+  coord_flip() +
+  labs(x="Pathway", y="Normalized Enrichment Score",
+       title=paste0("NES from GSEA (HALLMARKs of Cancer)")) + scale_fill_manual(values = c("FALSE" = "indianred", "TRUE" = "forestgreen")) +
+  theme_minimal() + theme(legend.position = "none")
+
+m_df<- msigdbr(species = "Homo sapiens", category = "C2", subcategory = "KEGG") %>% split(x = .$gene_symbol, f = .$gs_name)
+
+fgseaRes<- fgsea(m_df, stats =input_gsea)
+
+fgseaResTidy <- fgseaRes %>%
+  as_tibble() %>%
+  arrange(desc(NES))
+
+p2 <- ggplot(fgseaResTidy %>% filter(padj < 0.05) %>% head(n= 20), aes(reorder(gsub("KEGG_", "",pathway), NES), NES)) +
+  geom_col(aes(fill = NES > 0)) +
+  coord_flip() +
+  labs(x="Pathway", y="Normalized Enrichment Score",
+       title=paste0("NES from GSEA (KEGG pathways)")) + scale_fill_manual(values = c("FALSE" = "indianred", "TRUE" = "forestgreen")) +
+  theme_minimal() + theme(legend.position = "none")
+
+
+
+```
+
+
+

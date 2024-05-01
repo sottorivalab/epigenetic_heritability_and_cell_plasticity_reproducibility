@@ -1,0 +1,569 @@
+---
+title: "Figure 5"
+author: "Salvatore Milite"
+date: "02/02/2023"
+output: html_document
+---
+
+
+```{r}
+library(ArchR)
+library(parallel)
+library(tidyverse)
+library(ggrepel)
+library(Seurat)
+library(extrafont)
+
+source("../figure_utils.R")
+
+extrafont::loadfonts(quiet = T)
+
+```
+
+# Supplementary Figure 9
+
+## Panel A celltype by drug MSI
+
+```{r}
+options("SCpubr.ColorPaletteEnds" = FALSE)
+
+
+seur_merged_norm <- readRDS("../../../seurat_objects/MSI/seur_MSI_norm.rds")
+
+genes <- get_marker_colon_ephitelium()
+
+
+library(RColorBrewer)
+
+seur_merged_norm@meta.data$dot_plot_name <- seur_merged_norm@meta.data$drug2 %>% 
+  gsub("ERKi", "SCH772984", .) 
+
+p1_a <- SCpubr::do_DotPlot(seur_merged_norm[,grep("Exp",seur_merged_norm$orig.ident, invert = T) & (seur_merged_norm$drug1 == "None")], group.by = "dot_plot_name",
+                         features = genes, cluster = T,scale = T,use_viridis = F,
+                         plot.title = "Maker genes expression in MSI samples Under Drug", 
+                         sequential.palette = "RdBu", sequential.direction = -1, colors.use = c("blue", "white","red")) +
+  theme(text=element_text(size=FONT_SIZE,  family="Arial"), plot.title = element_text(hjust = 0.3))
+
+p2_a <- SCpubr::do_DotPlot(seur_merged_norm[,grep("Exp",seur_merged_norm$orig.ident) & (seur_merged_norm$drug1 == "None")], group.by = "dot_plot_name",
+                         features = genes, cluster = T,scale = T,use_viridis = F,
+                         plot.title = "Maker genes expression in MSI samples Expansion", 
+                         sequential.palette = "RdBu", sequential.direction = -1, colors.use = c("blue", "white","red")) +
+  theme(text=element_text(size=FONT_SIZE,  family="Arial"), plot.title = element_text(hjust = 0.3))
+
+
+panel_a <- (p1_a / p2_a) 
+
+```
+
+## Panel B celltype by drug AKT
+
+```{r}
+options("SCpubr.ColorPaletteEnds" = FALSE)
+
+
+seur_merged_filt <- readRDS(file = "../../../seurat_objects/MSS_batch2/seur_AKT_norm.rds")
+
+genes <- get_marker_colon_ephitelium()
+
+
+library(RColorBrewer)
+
+
+seur_merged_filt@meta.data$dot_plot_name <- seur_merged_filt@meta.data$drug2 %>% 
+  gsub("ERKi", "SCH772984", .) 
+
+
+p1_b <- SCpubr::do_DotPlot(seur_merged_filt[,grep("Exp",seur_merged_filt$orig.ident, invert = T) & (seur_merged_filt$drug1 == "None")], group.by = "dot_plot_name",
+                         features = genes, cluster = T,scale = T,use_viridis = F,
+                         plot.title = "Maker genes expression in AKT samples Under Drug", 
+                         sequential.palette = "RdBu", sequential.direction = -1, colors.use = c("blue", "white","red")) +
+  theme(text=element_text(size=FONT_SIZE,  family="Arial"), plot.title = element_text(hjust = 0.3))
+
+p2_b <- SCpubr::do_DotPlot(seur_merged_filt[,grep("Exp",seur_merged_filt$orig.ident) & (seur_merged_filt$drug1 == "None")], group.by = "dot_plot_name",
+                         features = genes, cluster = T,scale = T,use_viridis = F,
+                         plot.title = "Maker genes expression in AKT samples Expansion", 
+                         sequential.palette = "RdBu", sequential.direction = -1, colors.use = c("blue", "white","red"), number.breaks = 10) +
+  theme(text=element_text(size=FONT_SIZE,  family="Arial"), plot.title = element_text(hjust = 0.3)) 
+
+
+panel_b <- (p1_b / p2_b) 
+
+```
+
+## Panel C Erica Archetype distribution RNA MSI
+
+```{R}
+
+
+library(ggalluvial)
+library(ggtext)
+
+
+palette_bc_MSI <- readRDS("../../../other_data/palette_MSI.rds")
+
+arch_table_by_geno_MSI_batch2 <- readRDS("../../../archetype_params/MSI/arch_table_by_geno_MSI_batch2_RNA.rds")
+
+arch_table_by_geno_MSI_batch2_noCENPE_RNA <-arch_table_by_geno_MSI_batch2 %>%  filter(drug1 == "None") 
+
+
+arch_table_by_geno_MSI_batch2_noCENPE_RNA$stage <- ifelse(grepl("DMSO", arch_table_by_geno_MSI_batch2_noCENPE_RNA$stage), "parental",arch_table_by_geno_MSI_batch2_noCENPE_RNA$stage)
+
+arch_table_by_geno_MSI_batch2_noCENPE_RNA$drug <- arch_table_by_geno_MSI_batch2_noCENPE_RNA$drug2 %>% gsub("OXA", "Oxaliplatin", .) %>% gsub("ERKi", "SCH772984", .)   
+
+df_barplot_1 <- arch_table_by_geno_MSI_batch2_noCENPE_RNA %>% ungroup()  %>% filter(drug %in% c("DMSO", "Oxaliplatin")) %>%
+                      select(avg_prob, archs, drug, stage, bc44)  %>% unique()
+
+
+
+df_barplot_2 <- arch_table_by_geno_MSI_batch2_noCENPE_RNA %>% ungroup()  %>% filter(drug %in% c("DMSO", "SCH772984")) %>%
+                      select(avg_prob, archs, drug, stage, bc44)  %>% unique()
+
+
+
+
+p_bar_1 <- from_triple_to_ridgeplot(add_rescaled_other_bc(df_barplot_1,"CATTAACAGGTAAACATGTGTGGTTGACTGGTTGGTCAACACGT") ,
+                                    "bc_new","CATTAACAGGTAAACATGTGTGGTTGACTGGTTGGTCAACACGT", "Oxaliplatin", " under Oxaliplatin", "violet barcode", palette_bc_MSI["CATTAACAGGTAAACATGTGTGGTTGACTGGTTGGTCAACACGT"], label = c("DMSO", "DMSO", "Under drug", "Re-growth"))
+
+p_bar_2 <- from_triple_to_ridgeplot(add_rescaled_other_bc(df_barplot_2,"CATTAACAGGTAAACATGTGTGGTTGACTGGTTGGTCAACACGT") ,
+                                    "bc_new","CATTAACAGGTAAACATGTGTGGTTGACTGGTTGGTCAACACGT", "SCH772984", " under SCH772984", "violet barcode", palette_bc_MSI["CATTAACAGGTAAACATGTGTGGTTGACTGGTTGGTCAACACGT"], label = c("DMSO", "DMSO", "Under drug", "Re-growth"))
+
+panel_c <- p_bar_1/ p_bar_2
+
+
+
+
+
+```
+
+
+
+
+## Panel D Erica Archetype distribution RNA AKT
+
+```{r}
+library(ggalluvial)
+library(ggtext)
+
+
+palette <- readRDS("../../../other_data/palette_enriched_100.rds")
+
+
+arch_table_by_geno_AKT_batch2 <- readRDS("../../../archetype_params/MSS_batch2/arch_table_by_geno_AKT_batch2_RNA.rds")
+
+arch_table_by_geno_AKT_batch2_noCENPE_RNA <-arch_table_by_geno_AKT_batch2 %>%  filter(drug1 == "None") 
+
+
+arch_table_by_geno_AKT_batch2_noCENPE_RNA$stage <- ifelse(grepl("DMSO", arch_table_by_geno_AKT_batch2_noCENPE_RNA$drug2), "parental",arch_table_by_geno_AKT_batch2_noCENPE_RNA$stage %>% as.character())
+
+arch_table_by_geno_AKT_batch2_noCENPE_RNA$drug <- arch_table_by_geno_AKT_batch2_noCENPE_RNA$drug2 %>% gsub("OXA", "Oxaliplatin", .) %>% gsub("ERKi", "SCH772984", .)   
+
+df_barplot_1 <- arch_table_by_geno_AKT_batch2_noCENPE_RNA %>% ungroup()  %>% filter(drug %in% c("DMSO", "Oxaliplatin")) %>%
+                      select(avg_prob, archs, drug, stage, bc44)  %>% unique()
+
+
+
+df_barplot_2 <- arch_table_by_geno_AKT_batch2_noCENPE_RNA %>% ungroup()  %>% filter(drug %in% c("DMSO", "SCH772984")) %>%
+                      select(avg_prob, archs, drug, stage, bc44)  %>% unique()
+
+
+
+
+p_bar_1 <- from_triple_to_ridgeplot(add_rescaled_other_bc(df_barplot_1,"TCTGGTCATTCCCCTGCACAACACTGTGACCACACATGTGACTG") ,
+                                    "bc_new","TCTGGTCATTCCCCTGCACAACACTGTGACCACACATGTGACTG", "Oxaliplatin", " under Oxaliplatin", "violet barcode", palette["TCTGGTCATTCCCCTGCACAACACTGTGACCACACATGTGACTG"], label = c("DMSO", "DMSO", "Under drug", "Re-growth"))
+
+p_bar_2 <- from_triple_to_ridgeplot(add_rescaled_other_bc(df_barplot_2,"CTTCGGGACCAAGGTGGTCAGTCAACGTCATGACACGTACTGAC") ,
+                                    "bc_new","CTTCGGGACCAAGGTGGTCAGTCAACGTCATGACACGTACTGAC", "SCH772984", " under SCH772984", "blue barcode", palette["CTTCGGGACCAAGGTGGTCAGTCAACGTCATGACACGTACTGAC"], label = c("DMSO", "DMSO", "Under drug", "Re-growth"))
+
+panel_d <- p_bar_1/ p_bar_2
+```
+
+
+```{r}
+genes <- get_marker_colon_ephitelium()
+
+
+deepAA_final_AKT <- readRDS("../../../archetype_params/MSS_batch2/final_inference_RNA_AKT.rds")
+
+B <- deepAA_final_AKT$inferred_quantities$B
+
+
+archetypes_AKT <- B %*% t(seur_merged_filt@assays$RNA@data)
+
+seurat_archetypes_AKT <- CreateSeuratObject(archetypes_AKT %>% t)
+
+seurat_archetypes_AKT@meta.data$aa_group <- paste0("arch", 1:nrow(seurat_archetypes_AKT@meta.data))
+
+
+panel_e <- SCpubr::do_DotPlot(sample = seurat_archetypes_AKT, group.by = "aa_group",
+                         features = genes, cluster = T,scale = T,use_viridis = F,assay = "RNA",
+                         plot.title = "Maker genes expression in AKT (batch2) RNA archetypes", sequential.palette = "Blues", sequential.direction = 1, flip = T)  + theme(text=element_text(size=FONT_SIZE + 3,  family="Arial"),  plot.title = element_text(hjust = 0.5)) + guides(size = "none")
+
+
+```
+
+
+```{r}
+
+genes <- get_marker_colon_ephitelium()
+
+
+deepAA_final_MSI <- readRDS("../../../archetype_params/MSI/final_inference_RNA_MSI.rds")
+
+B <- deepAA_final_MSI$inferred_quantities$B
+
+deepAA_final_MSI <- B %*% t(seur_merged_norm@assays$RNA@data)
+
+seurat_archetypes_MSI <- CreateSeuratObject(deepAA_final_MSI %>% t)
+
+seurat_archetypes_MSI@meta.data$aa_group <- paste0("arch", 1:nrow(seurat_archetypes_MSI@meta.data))
+
+
+panel_f <- SCpubr::do_DotPlot(sample = seurat_archetypes_MSI, group.by = "aa_group",
+                         features = genes, cluster = T,scale = T,use_viridis = F,assay = "RNA",
+                         plot.title = "Maker genes expression in MSI RNA archetypes", sequential.palette = "Blues", sequential.direction = 1, flip = T)  + theme(text=element_text(size=FONT_SIZE + 3,  family="Arial"),  plot.title = element_text(hjust = 0.5)) + guides(size = "none")
+
+
+
+```
+
+```{r}
+supp_9_top <- ggpubr::ggarrange(panel_a, panel_b, ncol = 2, labels = c("A", "B"), font.label = list(size = 24 , family = "Arial"),
+                                  heights = c(1,1))
+
+supp_9_mid <- ggpubr::ggarrange(panel_f, NULL,panel_c, NULL, nrow = 1, labels = c("C","", "E",""), 
+                                  font.label = list(size = 24 , family = "Arial"), widths = c(1.1,0.2,.9, 0.15))
+
+supp_9_bottom <- ggpubr::ggarrange(panel_e, NULL, panel_d, NULL, nrow = 1, labels = c("D","", "F",""), 
+                                  font.label = list(size = 24 , family = "Arial"), widths = c(1.1,0.2,.9, 0.15))
+
+supp_9 <- ggpubr::ggarrange(supp_9_top, supp_9_mid, supp_9_bottom, ncol = 1, nrow = 3, heights = c(1,1, 1) )
+
+supp_9 %>% ggsave(plot = ., "supplmentary_figure_9.pdf",height = 9, width = 7 ,device = cairo_pdf, dpi = 300, scale = 2.8, bg = "white")
+
+supp_9 %>% ggsave(plot = ., "supplmentary_figure_9.png",height = 9, width = 7, device = "png", dpi = 300, scale = 2.8, bg = "white")
+
+
+```
+
+# Supplementary Figure 10 peaks enriched in gene promoters after Trametinib treatment
+
+
+```{r}
+addArchRThreads(threads = 10) 
+
+projAKT_filt <- loadArchRProject("../../../archr_objects/MSS_batch1/")
+
+projAKT_filt <- ArchR::addCellColData(ArchRProj = projAKT_filt,  name ="sample_plot" ,cells = projAKT_filt$cellNames, projAKT_filt$Sample %>% gsub("_expansion", "", .) %>% gsub("_control","",.) %>% gsub("AZD", "Capivasertib", .)  %>% gsub("_", "->",.) )
+
+```
+
+```{r}
+
+barcodes <- readr::read_tsv("barcode_multiome.tsv")
+
+barcodes <- barcodes %>% dplyr::filter(cell_name %in% projAKT_filt$cellNames)
+
+projAKT_filt <- addCellColData(ArchRProj = projAKT_filt, data = barcodes$real_bc44 %>% as.character(),
+    cells = barcodes$cell_name, name = "bc44", force = T)
+
+projAKT_filt <- addCellColData(ArchRProj = projAKT_filt, data = projAKT_filt$Sample %>% str_split(., pattern = "_") %>% sapply(., function(x) ifelse(length(x) == 2, x[1], x[2])),
+    cells = projAKT_filt$cellNames, name = "drug", force = T)
+
+projAKT_filt <- addCellColData(ArchRProj = projAKT_filt, data = ifelse(grepl("expansion", projAKT_filt$Sample), "expansion", "parental"),
+    cells = projAKT_filt$cellNames, name = "stage", force = T)
+
+markersGS_drug <- getMarkerFeatures(
+    ArchRProj = projAKT_filt, 
+    useMatrix = "GeneExpressionMatrix", 
+    groupBy = "drug",
+    bias = c("Gex_nUMI", "Gex_MitoRatio"),
+    testMethod = "wilcoxon",binarize = F
+)
+
+markerGSList_drug <- getMarkers(markersGS_drug, cutOff = "FDR <= 0.01 & abs(Log2FC) >= 1.")
+
+
+markersPeaks_bydrug <- getMarkerFeatures(
+    ArchRProj = projAKT_filt, 
+    useMatrix = "PeakMatrix", 
+    groupBy = "drug",
+  bias = c("TSSEnrichment", "log10(nFrags)"),
+  testMethod = "wilcoxon"
+)
+
+
+
+
+
+markerpeaksList_drug <- getMarkers(markersPeaks_bydrug, cutOff = "FDR <= 0.01 & abs(Log2FC) >= 1.")
+
+
+high_freq <- (projAKT_filt[projAKT_filt$drug == "Parental",]$bc44 %>% table())[(projAKT_filt[projAKT_filt$drug == "Parental",]$bc44 %>% table()) > 50] %>% names()
+
+projAKT_filt$bc44_new <- ifelse(is.na(projAKT_filt$bc44), "NA", projAKT_filt$bc44)
+
+projAKT_filt_parental <- projAKT_filt[projAKT_filt$drug == "Parental" & (projAKT_filt$bc44_new %in% c(high_freq, "NA") ),]
+projAKT_filt_parental <- addPeakSet(projAKT_filt_parental, getPeakSet(projAKT_filt)[getPeakSet(projAKT_filt)$peakType == "Promoter",])
+
+markersGS_BC <- getMarkerFeatures(
+    ArchRProj = projAKT_filt[projAKT_filt$drug == "Parental" & (projAKT_filt$bc44_new %in% c(high_freq, "NA") ),], 
+    useMatrix = "GeneExpressionMatrix", 
+    groupBy = "bc44_new",
+    bias = c("Gex_nUMI", "Gex_MitoRatio"),
+    testMethod = "wilcoxon",binarize = F
+)
+
+markersPeaks_byBC <- getMarkerFeatures( 
+    ArchRProj = projAKT_filt[projAKT_filt$drug == "Parental" & (projAKT_filt$bc44_new %in% c(high_freq, "NA") ),], 
+    useMatrix = "PeakMatrix"   , 
+    groupBy = "bc44_new",
+  bias = c("TSSEnrichment", "log10(nFrags)"),
+  testMethod = "wilcoxon",  
+)
+
+markerGSList_bc <- getMarkers(markersGS_BC, cutOff = "FDR <= 0.01 & abs(Log2FC) >= 1.")
+
+markerpeaksList_bc <- getMarkers(markersPeaks_byBC, cutOff = "FDR <= 0.01 & abs(Log2FC) >= 1.")
+
+
+peaks_by_drug_annot <- inner_join(projAKT_filt@peakSet %>% as_tibble(),markerpeaksList_drug$Trametinib %>% as_tibble())
+
+genes_in_promoters <- peaks_by_drug_annot %>% filter(peakType == "Promoter", nearestGene %in% markerGSList_drug$Trametinib$name) %>% pull(nearestGene)
+
+
+p <- plotBrowserTrack(
+    ArchRProj = projAKT_filt, 
+    groupBy = "Sample",  
+    geneSymbol = genes_in_promoters, 
+    upstream = 50000,
+    downstream = 50000
+)
+
+plotPDF(plotList = p, 
+    name = "Plot-Tracks-Marker-Genes-byDRUG-matched.ATAC.pdf", 
+    ArchRProj = projAKT_filt, 
+    addDOC = FALSE, width = 5, height = 5)
+
+```
+
+
+
+# Supplementary Figure 11 Biological characterization of Trametinib resistant population
+
+```{r}
+addArchRThreads(threads = 10) 
+
+projAKT_filt <- loadArchRProject("../../../archr_objects/MSS_batch1/")
+
+projAKT_filt <- ArchR::addCellColData(ArchRProj = projAKT_filt,  name ="sample_plot" ,cells = projAKT_filt$cellNames, projAKT_filt$Sample %>% gsub("_expansion", "", .) %>% gsub("_control","",.) %>% gsub("AZD", "Capivasertib", .)  %>% gsub("_", "->",.) )
+
+```
+
+
+## Panel A Transcription factors ups
+
+```{r}
+
+markersPeaks <- getMarkerFeatures(
+    ArchRProj = projAKT_filt, 
+    useMatrix = "PeakMatrix", 
+    groupBy = "sample_plot",
+  bias = c("TSSEnrichment", "log10(nFrags)"),
+  testMethod = "wilcoxon"
+)
+
+motifsUp <- peakAnnoEnrichment(
+    seMarker = markersPeaks,
+    ArchRProj = projAKT_filt,
+    peakAnnotation = "Motif",
+    cutOff = "FDR <= 0.001 & Log2FC >= 1",
+    background = "bgdPeaks"
+  )
+
+df_plot_pval <- motifsUp@assays@data %>% as.data.frame() %>%  filter(group_name == "mlog10Padj") %>% rownames_to_column("motif") %>% dplyr::select(-group, -group_name) %>%  pivot_longer(-motif, values_to = "p_val")
+df_plot_enrich <- motifsUp@assays@data %>% as.data.frame() %>%  filter(group_name == "Enrichment") %>% rownames_to_column("motif") %>% dplyr::select(-group, -group_name) %>%  pivot_longer(-motif, values_to = "enrich")
+
+df_plot <- dplyr::inner_join(df_plot_pval %>% mutate(motif = gsub("_.*$", "", motif)), 
+                             df_plot_enrich  %>% mutate(motif = gsub("_.*$", "", motif)), by = c("motif", "name"))
+
+
+df_plot_filt <-  df_plot %>% group_by(motif) %>% 
+  dplyr::mutate(enrich = scale(as.numeric(enrich)), max_pval = max(p_val %>%  as.numeric)) %>% ungroup() %>% 
+  filter(as.numeric(max_pval) > 20)
+
+clust1 <- hclust(dist(df_plot_filt %>% pivot_wider(values_from = enrich, names_from = name, id_cols = motif) %>% column_to_rownames("motif")))
+clust2 <- hclust(dist(df_plot_filt %>% pivot_wider(values_from = enrich, names_from = motif, id_cols = name) %>% column_to_rownames("name")))
+
+df_plot_filt$name <- factor(df_plot_filt$name, levels = unique(df_plot_filt$name)[clust2$order])
+df_plot_filt$motif <- factor(df_plot_filt$motif, levels = unique(df_plot_filt$motif)[clust1$order])
+
+
+panel_a <- df_plot_filt  %>% 
+  ggplot2::ggplot(mapping = ggplot2::aes(x = name,
+                                            y = motif,
+                                            fill = enrich,
+                                            size = as.numeric(p_val))) + 
+     ggplot2::geom_point(colour="black",pch=21) +
+     ggplot2::scale_size_continuous("-log10Padj",range = range(3,6)) +
+     ggplot2::scale_fill_gradientn(colors = c("blue", "white", "red"),
+                                   name = "Enrichment score",
+                                   breaks = scales::extended_breaks(n = 5)) + theme_bw(base_size = 12) + theme(text = element_text(family = "Arial")) + Seurat::RotatedAxis() + xlab("") +
+  ggtitle("Enriched Motifs in scATAC-seq")
+
+
+
+```
+
+
+## Panel B correlation gene-expression vs atac
+
+```{r}
+
+corGEM_MM <- readRDS("/home/salvatore.milite/data/sc_project/javi_sc_multiome/scripts/corGEM_MM.rds")
+
+
+corGEM_MM$TFRegulator <- "NO"
+corGEM_MM$TFRegulator[which(corGEM_MM$cor > 0.6 & corGEM_MM$padj < 0.05 & corGEM_MM$maxDelta > quantile(corGEM_MM$maxDelta, 0.6))] <- "YES"
+
+corGEM_MM$label <- ifelse(corGEM_MM$TFRegulator == "YES",corGEM_MM$MotifMatrix_matchName, NA )
+
+panel_b <- ggplot(data.frame(corGEM_MM), aes(cor, maxDelta, color = TFRegulator, label = label)) + 
+  geom_point() + 
+  theme_ArchR() +
+  geom_text_repel() +
+  geom_hline(yintercept = quantile(corGEM_MM$maxDelta, 0.6), lty = "dashed") +
+  geom_vline(xintercept = 0.6, lty = "dashed") + 
+  scale_color_manual(values = c("NO"="darkgrey", "YES"="firebrick3")) +
+  xlab("Correlation To Gene Expression") +
+  ylab("Max TF Motif Delta") +
+  scale_y_continuous(
+    expand = c(0,0), 
+    limits = c(0, max(corGEM_MM$maxDelta)*1.05)
+  ) + theme_bw(base_size = 12) + theme(legend.position = "none")  + 
+  theme(text = element_text(family = "Arial")) + ggtitle("Correlation ChromVAR score vs TF expression")
+```
+
+## Panel C chromVAR deviations
+
+```{r}
+pe_Combine <- plotEmbedding(projAKT_filt, name =c("z:HOXB9_529", "z:FOS_137", "z:ASCL2_89", "z:BACH1_130"), colorBy = "MotifMatrix",
+                            embedding = "UMAP_Combined",  labelAsFactors=F, labelMeans=F, threads = 8, rastr = T, size = 1, plotAs = "points") 
+
+panel_c <- lapply(pe_Combine, function(x) x %>% add_scPubr_theme())
+
+
+```
+
+
+## Panel D SETBP1
+
+```{r}
+library(ggplotify)
+
+plt_track <- plotBrowserTrack(
+    ArchRProj = projAKT_filt, 
+    groupBy = "sample_plot",  
+    geneSymbol = "SETBP1",baseSize = 12, facetbaseSize = 12,title = "SETBP1"
+    
+)$SETBP1
+
+panel_d <- as.ggplot(plt_track) + 
+  theme(text = element_text(family = "Arial"))
+
+```
+## Panel E Authophagy during Trametinib treatment 
+
+```{r}
+library(RColorBrewer)
+
+palette <- readRDS("/home/salvatore.milite/data/sc_project/javi_sc_rna_seq/intermediate_results/palette_enriched_100.rds")
+seurat_scrna_seq <- readRDS("/home/salvatore.milite/data/sc_project/javi_sc_rna_seq/intermediate_results/seur_merged_norm_integrated_with_atlas_no_magic.rds")
+
+
+stage_cols <- RColorBrewer::brewer.pal(3, "Set1")
+names(stage_cols) <- c("parental",   "under_drug", "expansion" )
+
+m_df <- msigdbr::msigdbr(species = "Homo sapiens", category = "H")
+
+
+curated_lyso_auto <- readr::read_csv2("/home/salvatore.milite/data/sc_project/r_markdowns/gene_lists/curated_atuophagy_lysosome_pereira.csv", col_names = F) %>% dplyr::select(X1,X2) %>% dplyr::rename(gene = X1, description = X2)
+PDAC_vs_normal_lyso_auto <- readr::read_csv2("/home/salvatore.milite/data/sc_project/r_markdowns/gene_lists/PDAC_vs_normal_autophagy_lysosome_pereira.csv", col_names = T, skip_empty_rows = T) 
+PDAC_vs_normal_lyso_auto <- PDAC_vs_normal_lyso_auto[!is.na(PDAC_vs_normal_lyso_auto$`Gene symbol`),]
+
+seurat_scrna_seq <- AddModuleScore(seurat_scrna_seq, features = list(genes = curated_lyso_auto$gene), name = "curated_autophagy_Pereira")
+seurat_scrna_seq <- AddModuleScore(seurat_scrna_seq, features = list(genes = PDAC_vs_normal_lyso_auto$`Gene symbol`), name = "PDAC_vs_norm_lyso_aut_pereira")
+
+seurat_scrna_seq <- AddModuleScore(seurat_scrna_seq, features = list(genes = m_df %>% filter(gs_name %in% "HALLMARK_MYC_TARGETS_V2") %>%  pull(gene_symbol) ), name = "HALLMARK_MYC_TARGETS_V2")
+
+panel_f_1_maybe <- FeaturePlot(seurat_scrna_seq, c("curated_autophagy_Pereira1", "PDAC_vs_norm_lyso_aut_pereira1"), max.cutoff = "q95")  & 
+  scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "RdBu")))
+panel_e <- SCpubr::do_ViolinPlot(sample = seurat_scrna_seq, plot_boxplot = FALSE,
+                                   group.by = "drug",split.by = "stage",
+                           features = c("curated_autophagy_Pereira1", "HALLMARK_MYC_TARGETS_V21"),
+                           ncol = 1, legend.position = "bottom", legend.title = "Stage",
+                           plot.title = c("Authophagy score (Ravichandran et al.)", "Hallmarks of cancer MYC targets V2"),
+                           share.y.lims = TRUE, ylab = c("", ""), xlab =  c("", "")) & scale_fill_manual("Stage", values = stage_cols, labels = c("Expansion", "Parental", "Under Drug")) & scale_x_discrete(labels= c("Capivasertib", "KU-0063794", "MK-2206", "Trametinib", "Untreated"))  & 
+  theme(text = element_text(family = "Arial"), plot.title = element_text(hjust = 1.2))
+
+panel_e[[2]] <- panel_e[[2]] + ggtitle("Hallmarks of cancer MYC targets V2")
+
+
+seurat_scrna_seq <- subset(seurat_scrna_seq, cells = names(!is.na(seurat_scrna_seq$bc44))[which(!is.na(seurat_scrna_seq$bc44))] )
+
+seurat_scrna_seq@meta.data$bc44_Trametib <- ifelse(seurat_scrna_seq@meta.data$bc44=="CTTCGGGACCAAGGTGGTCAGTCAACGTCATGACACGTACTGAC", "Blue barcode", "Others")
+
+palette_new <- c("Blue barcode" = palette["CTTCGGGACCAAGGTGGTCAGTCAACGTCATGACACGTACTGAC"] %>% unname(), "grey50" = "Others")
+
+panel_f <- SCpubr::do_ViolinPlot(sample = seurat_scrna_seq, plot_boxplot = FALSE,
+                                   group.by = "drug",split.by = "bc44_Trametib",
+                           features = c("curated_autophagy_Pereira1", "HALLMARK_MYC_TARGETS_V21"),
+                           ncol = 1, legend.position = "bottom", legend.title = "Stage",plot.title = "Authophagy score (Ravichandran et al.)",
+                           share.y.lims = TRUE, ylab = c("", ""), xlab =  c("", "")) & scale_fill_manual("", values = palette_new) & scale_x_discrete(labels= c("Capivasertib", "KU-0063794", "MK-2206", "Trametinib", "Untreated"))  & 
+  theme(text = element_text(family = "Arial"), plot.title = element_text(hjust = 1.2)) 
+
+panel_f[[2]] <- panel_f[[2]] + ggtitle("Hallmarks of cancer MYC targets V2")
+
+phase_cols <- RColorBrewer::brewer.pal(3, "Set2")
+names(phase_cols) <- c("G2M" ,"G1",  "S")
+
+panel_g <- SCpubr::do_BarPlot(sample =  subset(seurat_scrna_seq, cells = colnames(seurat_scrna_seq)[which((seurat_scrna_seq$stage == "under_drug") & (seurat_scrna_seq$drug == "Trametinib"))] ), 
+                                   group.by = "Phase",split.by = "bc44_Trametib",position = "fill",
+                           legend.position = "bottom", legend.title = "Stage",plot.title = "Cell cycle under Trametinib",
+                          ylab = c("", ""), xlab =  c("", ""), ) & scale_fill_manual("", values = phase_cols) & 
+  theme(text = element_text(family = "Arial"), plot.title = element_text(hjust = 0.3)) 
+
+
+```
+
+```{r}
+library(ggpubr)
+
+figure_5_column_1 <-   ggarrange(panel_d,panel_b ,ncol= 1, labels = c("A", "B"), font.label = list(size = 24 , family = "Arial"), heights = c(1.1,1))
+
+figure_5_column_2 <- panel_a
+  
+figure_5_column_4 <- ggarrange(ggarrange(plotlist = panel_c, ncol = 2, nrow = 2), ggarrange(plotlist = list(panel_e, panel_f), ncol = 2, labels = c("G", "H"), font.label = list(size = 24 , family = "Arial")) , nrow = 2, labels = c("F",""), font.label = list(size = 24 , family = "Arial"), heights = c(0.8,1))
+
+
+img <- png::readPNG("stringdb/upper_fig.png")
+
+panel_b_2 <- ggplot() + 
+    background_image(img) + theme_void()
+
+img <- png::readPNG("stringdb/lower_fig.png")
+
+panel_c_2 <- ggplot() + 
+    background_image(img) + theme_void()
+
+figure_5_column_3 <-  ggarrange(panel_b_2,panel_c_2, ncol = 1, labels = c("D", "E"), font.label = list(size = 24 , family = "Arial"), heights = c(1.1,1) )
+
+figure_5 <- ggarrange(figure_5_column_1, figure_5_column_2, figure_5_column_3, figure_5_column_4, ncol = 4 , labels = c("", "C", "", ""), font.label = list(size = 24 , family = "Arial") , widths = c(0.6,0.45,0.5,0.69))
+
+figure_5 %>% ggsave(plot = ., "figure5.pdf", device = cairo_pdf,width = 8.3, height = 11.7 / 3, dpi = 300, scale = 3.9, bg = "white")
+
+figure_5 %>% ggsave(plot = ., "figure5.png", device = "png",width = 8.3, height = 11.7 / 3, dpi = 300, scale = 3.9, bg = "white")
+
+
+```
+
+

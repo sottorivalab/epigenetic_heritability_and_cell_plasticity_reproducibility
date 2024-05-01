@@ -1,0 +1,189 @@
+---
+title: "Figure 1"
+author: "Salvatore Milite"
+date: "19/01/2023"
+output: html_document
+---
+```{r}
+library(tidyverse)
+extrafont::loadfonts(quiet = T)
+
+source("../figure_utils.R")
+
+FONT_SIZE = 12
+
+theme_set(theme_classic(base_size = FONT_SIZE,base_family = "Arial")) 
+
+drug_cols <- RColorBrewer::brewer.pal(6, "Dark2")
+names(drug_cols) <- c("MK-2206" , "Capivasertib", "KU-0063794", 
+  "Trametinib", "Oxaliplatin", "SCH772984")
+```
+
+# Main Figures
+
+## Panel A (Evolution is conserved across replicates)
+
+```{r}
+library(patchwork)
+
+palette_MSS <- readRDS("../../../other_data/palette_enriched_100.rds")
+
+df_sc_javi <- readRDS("../../../barcode_tables/MSS_batch1/cells_barcodes_annotated.rds")
+
+parental_javi <- readr::read_csv("../../../barcode_tables/MSS_batch1/all_barcodes_countd_raw_star.tsv") %>% group_by(sample_id) %>% mutate(N_TOT = sum(N), N_uniq = length(unique(real_bc44))) %>% ungroup() %>%
+  mutate(perc = N / N_TOT) %>% ungroup() %>% filter(grepl("^cDNA", sample_id))
+
+parental_javi <- parental_javi %>% mutate(drug_both = "Parental", genotype = "MSS", rep = gsub("DNA", "", sample_id), window = "Parental") %>% select(-sample_id, -N, -N_uniq, -N_TOT)
+
+
+
+
+df_float_javi <- readRDS("../../../barcode_tables/MSS_batch1/floating_annotated.rds") %>% filter(drug1 == "Trametinib", is.na(drug2), is_expansion) 
+
+max_day <- df_float_javi %>% pull(days) %>% max()  %>% as.integer()
+
+df_float_T <- df_float_javi %>% filter(days == !!max_day) %>% dplyr::rename(N_tot = tot_counts, sample_name = sample) %>% mutate(drugs_N = 1, modality = "DNA", stage = if_else(is_expansion, "expansion", "under_drug"))
+
+df_float_T <- df_float_T[, intersect(df_sc_javi %>% colnames(), df_float_T %>% colnames())]
+
+N_filt = 10000
+
+df_sc_javi <- rbind(df_sc_javi, df_float_T)
+
+
+df_sc_javi_plot <- df_sc_javi %>% filter(modality == "DNA") %>% mutate(drug_both = paste0(drug1, if_else(is.na(drug2),"", paste0(" -> ", drug2))), window = if_else(drugs_N == 1, "First Line Treatment", "Second Line Treatment"), genotype = "MSS" ) %>% 
+  select(perc, real_bc44, drug_both, genotype, rep, window)
+
+
+df_plot <- Reduce(rbind, list(df_sc_javi_plot, parental_javi))
+
+df_plot <- df_plot %>% mutate(drug_both = gsub("AZD", "Capivasertib", drug_both) ) %>% 
+  mutate(drug_both = gsub("KU", "KU-0063794", drug_both) ) %>% 
+  mutate(drug_both = gsub("MK", "MK-2206", drug_both) )
+
+df_plot$drug_both <- factor(df_plot$drug_both, levels = c(
+  "Parental", "MK-2206" , "Capivasertib", "KU-0063794", 
+  "Trametinib", "MK-2206 -> Trametinib", "Capivasertib -> Trametinib",
+  "KU-0063794 -> Trametinib", "Trametinib -> MK-2206", "Trametinib -> Capivasertib"
+))
+
+#df_plot <- df_sc_javi #%>% filter(N_tot > N_filt)
+
+panel_a1 <- ggplot() + 
+geom_bar(df_plot %>% filter( window != "Second Line Treatment"), mapping = aes(x = paste0(drug_both, rep), y = perc, fill = reorder(real_bc44, -perc)) ,stat="identity") + scale_fill_manual("BC44",values = palette_MSS) +
+facet_wrap(  ~ drug_both  ,scales = "free", nrow = 1) + xlab("") + ylab("%") +
+theme(legend.position= "None",axis.text.x =  element_blank(), axis.ticks.x = element_blank(), text = element_text(family = "Arial") ) + 
+  ggtitle("MSS mutant organoid line Parental and First Line Treatment") 
+
+panel_a2 <-  ggplot() + 
+geom_bar(df_plot %>% filter(window == "Second Line Treatment"), mapping = aes(x = paste0(drug_both, rep), y = perc, fill = reorder(real_bc44, -perc)) ,stat="identity") + 
+  scale_fill_manual("BC44",values = palette_MSS) +
+facet_wrap(   ~   drug_both, scales = "free", nrow = 1) + xlab("") + ylab("%") +
+theme(legend.position= "None",axis.text.x = element_blank(), axis.ticks.x = element_blank(), text = element_text(family = "Arial") ) + ggtitle("MSS mutant organoid line Second Line Treatment") 
+
+```
+
+```{r}
+palette_MSS <- readRDS("../../../other_data/palette_enriched_100.rds")
+palette_MSI <- readRDS("../../../other_data/palette_MSI.rds")
+
+
+df_sc_erica_MSS <- readr::read_csv("../../../barcode_tables/MSS_batch2/novaseq_barcode_processed.csv") %>% dplyr::select(real_bc44, perc, drug, genotype, stage,barcode_type, rep, day, group) %>%
+  filter(genotype == "AKT", barcode_type == "DNA") %>% mutate(sample_name = paste0(drug,"_", group,"_",gsub("REP", "", rep))) 
+
+df_sc_erica_MSI <- readr::read_csv("../../../barcode_tables/MSI/novaseq_barcode_processed.csv") %>% dplyr::select(real_bc44, perc, drug, genotype, stage,barcode_type, rep, day, group) %>%
+  filter(genotype == "MSI", barcode_type == "DNA") %>% mutate(sample_name = paste0(drug,"_", group,"_",gsub("REP", "", rep))) 
+
+
+
+df_sc_erica_AKT_no_perturb <- df_sc_erica_MSS %>% filter(group == "Parental")
+  
+df_sc_erica_MSI_no_perturb <- df_sc_erica_MSI %>% filter(group == "Parental")
+
+df_sc_erica_AKT_plot <- df_sc_erica_AKT_no_perturb %>% filter(barcode_type == "DNA") %>% mutate(rep = gsub("REP","", rep)) %>% 
+  select(perc, real_bc44, drug, genotype, rep) 
+
+df_sc_erica_MSI_plot <- df_sc_erica_MSI_no_perturb  %>% filter(barcode_type == "DNA") %>% mutate(rep = gsub("REP","", rep)) %>% 
+  select(perc, real_bc44, drug, genotype, rep) 
+
+df_plot_batch2 <- Reduce(rbind, list( df_sc_erica_AKT_plot, df_sc_erica_MSI_plot))
+
+df_plot_batch2 <-  df_plot_batch2 %>% mutate(drug_plot = gsub("1$", " - Under drug", drug) ) %>% 
+           mutate(drug_plot = gsub("2$", " - Re-growth", drug_plot) ) 
+
+df_plot_batch2 <- df_plot_batch2 %>%  mutate(drug_plot = gsub("ERK", "SCH772984",drug_plot)) %>%  mutate(drug_plot = gsub("OXA", "Oxaliplatin",drug_plot))
+
+df_plot_batch2$drug_plot <-  factor(df_plot_batch2$drug_plot , levels= c("DMSO" ,"Oxaliplatin - Under drug", "Oxaliplatin - Re-growth", "SCH772984 - Under drug" ,"SCH772984 - Re-growth" ))
+
+```
+
+
+```{r}
+
+panel_a4 <-  ggplot() + 
+geom_bar(df_plot_batch2 %>% filter(genotype == "MSI", drug != "OXA2"),  mapping = aes(x = paste0(drug_plot, rep), y = perc, fill = reorder(real_bc44, -perc)) ,stat="identity") +
+theme_classic()+ scale_fill_manual("BC44",values = palette_MSI) +
+facet_wrap(  . ~   drug_plot, scales = "free", nrow = 1) + xlab("") + ylab("%") +
+theme(legend.position= "None",axis.text.x = element_blank(), axis.ticks.x = element_blank(), text = element_text(family = "Arial") ) + ggtitle("MSI organoid line First Line Treatment") 
+
+
+panel_a <- cowplot::plot_grid(panel_a1, panel_a2, panel_a4, rel_heights = c(0.5,0.5, 0.5), ncol = 1, labels = c("A", "C", "D"), label_size = 18)
+```
+
+
+## Panel B (The dynamics of evolution)
+
+
+```{r}
+library(ggpubr)
+FILT_COUNTS = 5e5
+FILT_POP = 0.05
+extrafont::loadfonts(quiet = T)
+
+palette <- readRDS("../../../other_data/palette_enriched_100.rds")
+df_float <- readRDS("../../../barcode_tables/MSS_batch1/cells_barcodes_annotated.rds")
+
+df_pop <- df_float %>%  filter(tot_counts > FILT_COUNTS) %>% group_by(days, drug1, drug2, rep, real_bc44, perc, N) %>% 
+  dplyr::summarize() %>%  ungroup() %>%  mutate(sample = paste0(drug1, if_else(is.na(drug2), "", paste0(" -> ", drug2 )))) %>% 
+  dplyr::select(sample,days,real_bc44, perc, rep, N )  %>% dplyr::rename(Time = days, Identity = real_bc44, Frequency = perc, Population = N) %>% 
+  mutate(Time = as.numeric(Time))
+
+df_pop <- df_pop %>% group_by(Identity) %>% mutate(m_freq = max(Frequency)) %>% 
+mutate(Identity = if_else(m_freq > FILT_POP, Identity, "low_bar")) %>% group_by(Identity, Time, rep, sample) %>%
+dplyr::summarize( Frequency = sum(Frequency), Population = sum(Population)) %>% ungroup() %>% unique()
+
+df_pop <- df_pop  %>% mutate(sample = gsub("AZD", "Capivasertib", sample) ) %>% 
+  mutate(sample = gsub("KU", "KU-0063794", sample) ) %>% 
+  mutate(sample = gsub("MK", "MK-2206", sample) )
+
+
+
+AZD_trametinib_plots <- lapply(1:2, plot_muller, df_pop = df_pop, sample = "Capivasertib -> Trametinib")
+KU_trametinib_plots <- lapply(1:2, plot_muller, df_pop = df_pop, sample = "KU-0063794 -> Trametinib")
+MK_trametinib_plots <- lapply(1:2, plot_muller, df_pop = df_pop, sample = "MK-2206 -> Trametinib")
+
+
+
+panel_b <- ggarrange( KU_trametinib_plots[[1]], KU_trametinib_plots[[2]], AZD_trametinib_plots[[1]], AZD_trametinib_plots[[2]], MK_trametinib_plots[[1]] ,MK_trametinib_plots[[2]],
+                     ncol = 1, align = "hv")
+
+```
+
+
+
+
+# Final figure
+
+```{r}
+library(ggplotify)
+
+figure_2 <- cowplot::plot_grid(panel_a, panel_b, labels = c("","B"), label_size = 18, ncol = 2)
+
+
+figure_2 %>% ggsave(plot = ., "figure2.pdf", device = cairo_pdf,width = 8.3, height = 11.7 / 2, dpi = 300, scale = 3.3)
+figure_2 %>% ggsave(plot = ., "figure2.png", width = 8.3, height = 11.7 / 2, dpi = 300, scale = 3.3, bg = 'white')
+
+```
+
+
+

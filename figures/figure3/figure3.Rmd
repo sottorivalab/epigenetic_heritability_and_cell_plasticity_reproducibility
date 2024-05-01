@@ -1,0 +1,232 @@
+---
+title: "Figure 3"
+author: "Salvatore Milite"
+date: "27/01/2023"
+output: html_document
+---
+
+## Panel A-D (Exploratory UMAPs)
+
+```{r}
+library(Seurat)
+library(ggpubr)
+library(SCpubr)
+library(dplyr)
+library(RColorBrewer)
+library(tidyr)
+library(tibble)
+extrafont::loadfonts(quiet = T)
+
+FONT_SIZE <- 12
+
+palette <- readRDS("../../../other_data/palette_enriched_100.rds")
+seurat_scrna_seq <- readRDS("../../../seurat_objects/MSS_batch1/seur_merged_norm_integrated_with_atlas_no_magic.rds")
+
+seurat_scrna_seq@meta.data <- seurat_scrna_seq@meta.data %>% mutate(drug = gsub("AZD", "Capivasertib", drug) ) %>% 
+  mutate(drug = gsub("KU", "KU-0063794", drug) ) %>% 
+  mutate(drug = gsub("MK", "MK-2206", drug) )
+
+seurat_scrna_seq@meta.data <- seurat_scrna_seq@meta.data %>% mutate(drug1 = gsub("AZD", "Capivasertib", drug1) ) %>% 
+  mutate(drug1 = gsub("KU", "KU-0063794", drug1) ) %>% 
+  mutate(drug1 = gsub("MK", "MK-2206", drug1) )
+
+seurat_scrna_seq@meta.data <- seurat_scrna_seq@meta.data %>% mutate(drug2 = gsub("AZD", "Capivasertib", drug2) ) %>% 
+  mutate(drug2 = gsub("KU", "KU-0063794", drug2) ) %>% 
+  mutate(drug2 = gsub("MK", "MK-2206", drug2) )
+
+
+  
+stage_cols <- RColorBrewer::brewer.pal(3, "Set1")
+names(stage_cols) <- c("parental",   "under_drug", "expansion" )
+
+panel_a_plot1 <- do_DimPlot(seurat_scrna_seq,   group.by = "stage", shuffle = TRUE, legend.title.position = "bottom", legend.title = "Stage") + ggtitle("Experimental stage") + scale_color_manual("",values = stage_cols, labels = c("Re-growth", "Parental", "Under drug")) + theme(text=element_text(size=FONT_SIZE,  family="Arial"), plot.title = element_text(hjust = 0.5))
+
+
+drug_cols <- c(RColorBrewer::brewer.pal(4, "Dark2"), "grey50")
+names(drug_cols) <- c("MK-2206" ,"KU-0063794",  "Capivasertib", 
+  "Trametinib", "Parental")
+
+seurat_scrna_seq@meta.data <-  seurat_scrna_seq@meta.data %>% mutate(drug = if_else(is.na(drug), "Parental", drug))
+
+panel_a_plot2 <- do_DimPlot(seurat_scrna_seq ,   group.by = "drug", shuffle = TRUE, legend.title.position = "bottom", legend.title = "Drug") + ggtitle("Treatments distributiion") + scale_color_manual("",values = drug_cols) + theme(text=element_text(size=FONT_SIZE,  family="Arial"), plot.title = element_text(hjust = 0.5)) 
+
+panel_a_plot3 <- do_DimPlot(seurat_scrna_seq,   group.by = "bc44", shuffle = TRUE, legend.title.position = "bottom", legend.title = "Treatment Window") + ggtitle("Lentiviral barcode distribution") + scale_color_manual("",values = palette) + theme(text=element_text(size=FONT_SIZE,  family="Arial"), legend.position = "None", plot.title = element_text(hjust = 0.5))
+
+
+phase_cols <- RColorBrewer::brewer.pal(3, "Set2")
+names(phase_cols) <- c("G2M" ,"G1",  "S")
+
+panel_a_plot4 <-do_DimPlot(seurat_scrna_seq,   group.by = "Phase", shuffle = TRUE, legend.title.position = "bottom", legend.title = "Phase") + ggtitle("Cell cycle pahse") + scale_color_manual("",values = phase_cols, labels = c( "G1",  "S", "G2/M")) + theme(text=element_text(size=FONT_SIZE,  family="Arial"), plot.title = element_text(hjust = 0.5))
+
+
+panel_a <- cowplot::plot_grid(panel_a_plot1[[1]],panel_a_plot2[[1]],panel_a_plot3[[1]],panel_a_plot4[[1]], ncol = 2, nrow = 2,align = "hv", labels  = c("A", "B", "C", "D"),
+                               axis = "btlr", label_fontfamily = "Arial", label_size = 24) 
+
+
+panel_a %>% ggsave(filename = "panels_main/figure3_panel_a.png", height = 8, width = 6.9, scale = 1.5)
+```
+
+## Panel E Cell type like markers in the sample 
+
+```{r}
+
+options("SCpubr.ColorPaletteEnds" = FALSE)
+
+
+genes <- list("Stem" = c("LGR5", "ASCL2", "SMOC2", "RGMB", "OLFM4"),
+              "Enterocytes" = c("RBP2", "ANPEP", "FABP2"),
+              "Paneth" = c("DEFA5", "DEFA6", "LY6D"),
+              "Goblet" = c("CLCA1", "SPDEF", "FCGBP", "ZG16", "MUC2", "TFF3"),
+              "Enteroendocrine" = c("CHGA", "CHGB", "NEUROD1"),
+              "Microfold" = c("SPIB", "CCL20", "GP2"),
+              "Colonocytes" = c("CA2", "SLC26A2", "FABP1"),
+              "TA (proliferative)"= c("MKI67", "TOP2A", "PCNA")
+              )
+
+
+library(RColorBrewer)
+
+seurat_scrna_seq@meta.data$name_plots <- paste0(ifelse( !is.na(seurat_scrna_seq$drug1),seurat_scrna_seq$drug1, "Parental" ), ifelse(!is.na(seurat_scrna_seq$drug2) & seurat_scrna_seq$drug2 != "NA", paste0("->", seurat_scrna_seq$drug2), "")) %>% as.factor()
+
+seurat_scrna_seq <- Seurat::SetIdent(seurat_scrna_seq,value =  "name_plots")
+seurat_scrna_seq_under <- subset(seurat_scrna_seq, stage == "under_drug" | stage == "parental")
+seurat_scrna_seq_exp <- subset(seurat_scrna_seq, stage != "under_drug")
+
+
+p1 <- SCpubr::do_DotPlot(sample = seurat_scrna_seq_under, group.by = "name_plots",
+                         features = genes, cluster = T,scale = T,use_viridis = F,
+                         plot.title = "Maker genes expression in under drug samples", sequential.palette = "RdBu", sequential.direction = -1) + theme(text=element_text(size=FONT_SIZE,  family="Arial"), plot.title = element_text(hjust = 0.3))
+
+p2 <- SCpubr::do_DotPlot(sample = seurat_scrna_seq_exp, 
+                         features = genes, cluster = T,scale = T,sequential.palette = "RdBu",
+                         plot.title = "Maker genes expression in re-growth/parental samples", colors.use = c("blue", "white","red")) +
+  theme(text=element_text(size=FONT_SIZE,  family="Arial"), plot.title = element_text(hjust = 0.3))
+
+(p1 / p2) %>% ggsave(filename = "panels_main/figure3_panel_e.png",width = 12, height = 8 , scale = 1.5)
+
+panel_e <- (p1 / p2)
+
+panel_e
+```
+
+## Panel G cell types archetypes
+
+
+```{r}
+model_params <- readRDS("../../../archetype_params/MSS_batch1/arch_model_params_new3.rds")
+
+
+genes <- list("Stem" = c("LGR5", "ASCL2", "SMOC2", "RGMB", "OLFM4"),
+              "Enterocytes" = c("RBP2", "ANPEP", "FABP2"),
+              "Paneth" = c("DEFA5", "DEFA6", "LY6D"),
+              "Goblet" = c("CLCA1", "SPDEF", "FCGBP", "ZG16", "MUC2", "TFF3"),
+              "Enteroendocrine" = c("CHGA", "CHGB", "NEUROD1"),
+              "Microfold" = c("SPIB", "CCL20", "GP2"),
+              "Colonocytes" = c("CA2", "SLC26A2", "FABP1"),
+              "TA (proliferative)"= c("MKI67", "TOP2A", "PCNA")
+              )
+
+
+library(RColorBrewer)
+
+seurat_archetypes <- CreateSeuratObject((model_params$B %*% t(seurat_scrna_seq[,seurat_scrna_seq$has_barcode]@assays$RNA@data %>% as.matrix) )   %>% t())
+
+seurat_archetypes@meta.data$aa_group <- paste0("arch", 1:nrow(seurat_archetypes@meta.data))
+
+
+panel_g <- SCpubr::do_DotPlot(sample = seurat_archetypes, group.by = "aa_group",
+                         features = genes, cluster = T,scale = T,use_viridis = F,assay = "RNA",
+                         plot.title = "Maker genes expression in RNA archetypes", sequential.palette = "Blues", sequential.direction = 1, flip = T)  + theme(text=element_text(size=FONT_SIZE + 3,  family="Arial"),  plot.title = element_text(hjust = 0.5)) + guides(size = "none")
+```
+
+
+
+
+
+## Panel H archetype distributiion
+
+```{r}
+model_params <- readRDS("../../../archetype_params/MSS_batch1/arch_model_params_new3.rds")
+
+seurat_scrna_seq_has_bc <- seurat_scrna_seq[,seurat_scrna_seq$has_barcode]
+
+
+B <- model_params$B %>% t()
+
+weights <- model_params$A
+
+colnames(weights) <- paste0("arch", 1:ncol(weights))
+rownames(weights) <- colnames(seurat_scrna_seq_has_bc)
+
+meta_old <- seurat_scrna_seq_has_bc@meta.data
+seurat_scrna_seq_has_bc@meta.data <- meta_old %>% select(-starts_with("arch"))
+seurat_scrna_seq_has_bc@meta.data <- cbind(seurat_scrna_seq_has_bc@meta.data, weights[rownames(seurat_scrna_seq_has_bc@meta.data),])
+
+panel_h <- SCpubr::do_FeaturePlot(seurat_scrna_seq_has_bc, paste0("arch", 1:ncol(weights)), max.cutoff = 
+                               sapply(seurat_scrna_seq_has_bc@meta.data[, paste0("arch", 1:ncol(weights))], quantile, 0.99),
+                              sequential.palette = "Blues", sequential.direction = -1, use_viridis = T, viridis.direction = 1
+                              )  + theme(text=element_text(size=FONT_SIZE,  family="Arial"))
+
+```
+
+
+
+
+## Panel I barocode swift for individual barcodes
+
+```{r}
+source("../figure_utils.R")
+
+seurat_scrna_seq_has_bc@meta.data <- seurat_scrna_seq_has_bc@meta.data %>% mutate(bc_44_figure =  case_when(
+  is.na(bc44) ~ "nobarcode",
+  bc44 == "CTTCGGGACCAAGGTGGTCAGTCAACGTCATGACACGTACTGAC" ~ "CTTCGGGACCAAGGTGGTCAGTCAACGTCATGACACGTACTGAC",
+  bc44 == "TCTGGTCATTCCCCTGCAACGTACCATGCATGCACACAACCATG" ~ "TCTGGTCATTCCCCTGCAACGTACCATGCATGCACACAACCATG",
+  bc44 == "TGATCTCCCATAATACCACACATGCAGTCACAACACACGTACTG" ~ "TGATCTCCCATAATACCACACATGCAGTCACAACACACGTACTG",
+  bc44 == "TGATCTCCCATAATCAACACTGACCACATGGTACTGTGGTACGT" ~ "TGATCTCCCATAATCAACACTGACCACATGGTACTGTGGTACGT",
+  # (bc44 %in% c("TCTGGTCATTCCCCTGCAACGTACCATGCATGCACACAACCATG", "CTTCGGGACCAAGGTGGTCAGTCAACGTCATGACACGTACTGAC", "TGATCTCCCATAATACCACACATGCAGTCACAACACACGTACTG")) ~ bc44,
+  TRUE ~ "other"
+))
+
+ arch_table_by_geno <- seurat_scrna_seq_has_bc@meta.data %>% filter(!is.na(bc_44_figure)) %>%
+   rownames_to_column("key") %>% select(key,drug, stage, bc_44_figure, starts_with("arch")) %>% pivot_longer(starts_with("arch"), names_to = "archs", values_to = "weights") %>% dplyr::group_by(drug, stage, bc_44_figure, across(starts_with("arch"))) %>% dplyr::mutate(avg_prob = mean(weights))  %>% ungroup()
+
+
+drug_barcodes <- data.frame(
+  drugs <- c("MK-2206", "KU-0063794", "Capivasertib", "Trametinib"),
+  barcodes <- c("TGATCTCCCATAATACCACACATGCAGTCACAACACACGTACTG", "TGATCTCCCATAATACCACACATGCAGTCACAACACACGTACTG", "TCTGGTCATTCCCCTGCAACGTACCATGCATGCACACAACCATG", "CTTCGGGACCAAGGTGGTCAGTCAACGTCATGACACGTACTGAC"),
+  c("purple barcode", "purple barcode", "green barcode", "blue barcode")
+)
+
+plots_to_arrange <- lapply(1:nrow(drug_barcodes), function(i){
+  print(i)
+  drug <- drug_barcodes[i,1]
+  bc <- drug_barcodes[i,2]
+  which_bc <- paste0(" under ", drug)
+  from_triple_to_ridgeplot(arch_table_by_geno, "bc_44_figure", bc, drug, which_bc, drug_barcodes[i,3], palette[bc])
+  })
+
+panel_i <- ggarrange(plotlist = plots_to_arrange, ncol = 1, nrow = 4, common.legend = T, legend = "right")
+
+
+```
+
+## Final Figure 
+
+```{r}
+img <- png::readPNG("panel_C.png")
+
+panel_f <- ggplot() + 
+    background_image(img) + theme_void()
+
+figure_3 <- ggpubr::ggarrange(plotlist = list(ggpubr::ggarrange(panel_a, panel_e, ncol = 2, labels = c("", "E"), font.label = list(size = 24 , family = "Arial")), panel_f, 
+                                              ggpubr::ggarrange(plotlist = list(panel_g,NULL, panel_h, NULL, panel_i, NULL), ncol = 6, labels = c("G", "", "H","","I"), widths = c(1.2,0.15,1.2,0.2,1., 0.2),
+                                                                font.label = list(size = 24 , family = "Arial"))), 
+                              ncol = 1, nrow = 3, labels = c("","F",""), heights = c(1.05,0.85,1.3), font.label = list(size = 24 , family = "Arial"))
+
+figure_3 %>% ggsave(plot = ., "figure3.pdf", device = cairo_pdf,width = 8.3, height = 10, dpi = 300, scale = 3.6, bg = "white")
+figure_3 %>% ggsave(plot = ., "figure3.png", device = "png",width = 8.3, height = 10, dpi = 300, scale = 3.6 , bg = "white")
+
+```
+
+
+

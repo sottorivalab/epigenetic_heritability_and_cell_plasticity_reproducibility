@@ -1,0 +1,469 @@
+---
+title: "Supplementary Figures 1-6"
+author: "Salvatore Milite"
+date: "2024-03-05"
+output: html_document
+---
+
+
+
+```{r}
+library(Seurat)
+library(ggpubr)
+library(SCpubr)
+library(dplyr)
+library(RColorBrewer)
+library(Matrix)
+
+extrafont::loadfonts(quiet = T)
+
+source("../figure_utils.R")
+devtools::load_all("/home/salvatore.milite/work/r_packages/scUtils/")
+source("~/data/sc_project/r_markdowns/utils_functions.R")
+
+FONT_SIZE <- 12
+```
+
+# Supplementary Figure 3 All Muller plots
+
+## All muller MSS batch 1
+
+```{r}
+
+library(ggpubr)
+FILT_COUNTS = 5e5
+FILT_POP = 0.05
+extrafont::loadfonts(quiet = T)
+
+drug_cols <- RColorBrewer::brewer.pal(6, "Dark2")
+names(drug_cols) <- c("MK-2206" , "Capivasertib", "KU-0063794", 
+  "Trametinib", "Oxaliplatin", "SCH772984")
+
+
+palette <- readRDS("../../../other_data/palette_enriched_100.rds")
+df_float <- readRDS("../../../barcode_tables/MSS_batch1/floating_annotated.rds")
+
+df_pop <- df_float %>%  filter(tot_counts > FILT_COUNTS) %>% group_by(days, drug1, drug2, rep, real_bc44, perc, N) %>% 
+  dplyr::summarize() %>%  ungroup() %>%  mutate(sample = paste0(drug1, if_else(is.na(drug2), "", paste0(" -> ", drug2 )))) %>% 
+  dplyr::select(sample,days,real_bc44, perc, rep, N )  %>% dplyr::rename(Time = days, Identity = real_bc44, Frequency = perc, Population = N) %>% 
+  mutate(Time = as.numeric(Time))
+
+df_pop <- df_pop %>% group_by(Identity) %>% mutate(m_freq = max(Frequency)) %>% 
+mutate(Identity = if_else(m_freq > FILT_POP, Identity, "low_bar")) %>% group_by(Identity, Time, rep, sample) %>%
+dplyr::summarize( Frequency = sum(Frequency), Population = sum(Population)) %>% ungroup() %>% unique()
+
+df_pop <- df_pop  %>% mutate(sample = gsub("AZD", "Capivasertib", sample) ) %>% 
+  mutate(sample = gsub("KU", "KU-0063794", sample) ) %>% 
+  mutate(sample = gsub("MK", "MK-2206", sample) )
+
+
+```
+```{r}
+AZD_trametinib_plots <- lapply(1:3, plot_muller, df_pop = df_pop, sample = "Capivasertib -> Trametinib")
+KU_trametinib_plots <- lapply(1:3, plot_muller, df_pop = df_pop, sample = "KU-0063794 -> Trametinib")
+MK_trametinib_plots <- lapply(1:3, plot_muller, df_pop = df_pop, sample = "MK-2206 -> Trametinib")
+Trametinib_MK_plots <- lapply(1:3, plot_muller, df_pop = df_pop, sample = "Trametinib -> MK-2206")
+Trametinib_AZD_plots <- lapply(1:3, plot_muller, df_pop = df_pop, sample = "Trametinib -> Capivasertib")
+
+
+all_AKT_batch1 <- do.call(c, list(AZD_trametinib_plots, KU_trametinib_plots, MK_trametinib_plots,
+                          Trametinib_MK_plots, Trametinib_AZD_plots))
+```
+
+## All muller MSS batch 2 and MSI
+
+```{r}
+
+library(ggpubr)
+FILT_COUNTS = 1e5
+FILT_POP = 0.01
+extrafont::loadfonts(quiet = T)
+
+palette_MSI <- readRDS("../../../other_data/palette_MSI.rds")
+
+date_dict <- readRDS("therapy_days_batch_2.rds") 
+names(date_dict) <- names(date_dict) %>% gsub("ERK", "SCH772984", .) %>% gsub("OXA", "Oxaliplatin", .)
+
+OXA_exp <- readRDS("other_data/Oxaliplatin_ending_therapy_day.rds")
+ERK_exp <- readRDS("ERKi_ending_therapy_day.rds")
+
+df_float <- readr::read_csv("../../../barcode_tables/MSI/novaseq_barcode_processed.csv") %>% 
+  filter(barcode_type == "FD") %>% mutate( drug =  gsub("[12]", "", drug ), rep = as.numeric(gsub("REP", "", rep )) ) %>% 
+  mutate(day = case_when(
+    drug == "ERK" & stage == "expansion"~ day + 14,
+    drug == "OXA" & stage == "expansion"~ day + 18,
+    TRUE ~ day
+  ))
+
+df_float <-df_float  %>% mutate(drug = gsub("ERK", "SCH772984", drug) ) %>% 
+  mutate(drug = gsub("OXA", "Oxaliplatin", drug) ) 
+
+df_float$days <- sapply(1:nrow(df_float), function(i) {
+  date_dict[paste0(df_float[i,]$genotype, "-", df_float[i,]$group, "-", df_float[i,]$drug)][[1]][as.integer(df_float[i,]$day)] + 1
+})
+
+df_pop <- df_float %>%  filter(N_TOT > FILT_COUNTS) %>% dplyr::group_by(days, drug, group,genotype, rep, real_bc44, perc, N) %>% 
+  dplyr::summarize() %>%  dplyr::ungroup() %>%  dplyr::mutate(sample = paste0(genotype, "-", group, "-", drug)) %>% 
+  dplyr::select(sample,days,real_bc44, perc, rep, N )  %>% dplyr::rename(Time = days, Identity = real_bc44, Frequency = perc, Population = N) %>% 
+  mutate(Time = as.numeric(Time))
+
+df_pop <- df_pop %>% dplyr::group_by(Identity) %>% mutate(m_freq = max(Frequency)) %>% 
+mutate(Identity = if_else(m_freq > FILT_POP, Identity, "low_bar")) %>% dplyr::group_by(Identity, Time, rep, sample) %>%
+dplyr::summarize( Frequency = sum(Frequency), Population = sum(Population)) %>%  dplyr::ungroup() %>% unique()
+
+
+```
+
+```{r}
+AKT_Parental_ERK <- lapply(1:3, plot_muller2, df_pop = df_pop, sample = "AKT-Parental-SCH772984", palette = palette, plot_bar= T, window_size = 9)
+AKT_Parental_OXA <- lapply(1:3, plot_muller2, df_pop = df_pop, sample = "AKT-Parental-Oxaliplatin", palette = palette, plot_bar= T, window_size = 9)
+AKT_CENPE_ERK <- lapply(1:3, plot_muller2, df_pop = df_pop, sample = "AKT-CENPE-SCH772984", palette = palette, plot_bar= T, window_size = 9)
+AKT_CENPE_OXA <- lapply(1:3, plot_muller2, df_pop = df_pop, sample = "AKT-CENPE-Oxaliplatin", palette = palette, plot_bar= T, window_size = 9)
+AKT_CENPE_MPS1_ERK <- lapply(1:3, plot_muller2, df_pop = df_pop, sample = "AKT-CENPE + MPS1-SCH772984", palette = palette, plot_bar= T, window_size = 9)
+AKT_CENPE_MPS1_OXA <- lapply(1:3, plot_muller2, df_pop = df_pop, sample = "AKT-CENPE + MPS1-Oxaliplatin", palette = palette, plot_bar= T, window_size = 9)
+
+
+all_AKT_batch2 <- do.call(c, list(AKT_Parental_ERK, AKT_Parental_OXA, AKT_CENPE_ERK,
+                          AKT_CENPE_OXA, AKT_CENPE_MPS1_ERK, AKT_CENPE_MPS1_OXA))
+```
+
+```{r}
+MSI_Parental_ERK <- lapply(1:3, plot_muller2, df_pop = df_pop, sample = "MSI-Parental-SCH772984", palette = palette_MSI, plot_bar= T, window_size = 9)
+MSI_Parental_OXA <- lapply(1:3, plot_muller2, df_pop = df_pop, sample = "MSI-Parental-Oxaliplatin", palette = palette_MSI, plot_bar= T, window_size = 9, index_to_rm = 3)
+MSI_CENPE_ERK <- lapply(1:3, plot_muller2, df_pop = df_pop, sample = "MSI-CENPE-SCH772984", palette = palette_MSI, plot_bar= T, window_size = 9)
+MSI_CENPE_OXA <- lapply(1:3, plot_muller2, df_pop = df_pop, sample = "MSI-CENPE-Oxaliplatin", palette = palette_MSI, plot_bar= T, window_size = 9, index_to_rm = 3)
+MSI_CENPE_MPS1_ERK <- lapply(1:3, plot_muller2, df_pop = df_pop, sample = "MSI-CENPE + MPS1-SCH772984", palette = palette_MSI, plot_bar= T, window_size = 9)
+MSI_CENPE_MPS1_OXA <- lapply(1:3, plot_muller2, df_pop = df_pop, sample = "MSI-CENPE + MPS1-Oxaliplatin", palette = palette_MSI, plot_bar= T, window_size = 11, index_to_rm = 3)
+
+all_MSI <- do.call(c, list(MSI_Parental_ERK, MSI_Parental_OXA, MSI_CENPE_ERK,
+                          MSI_CENPE_OXA, MSI_CENPE_MPS1_ERK, MSI_CENPE_MPS1_OXA))
+
+```
+
+```{r}
+pdf("supplementary_figure_3.pdf", height = 3, width = 15)
+all_AKT_batch1
+all_AKT_batch2
+all_MSI
+dev.off()
+```
+
+# Supplementary 4
+
+### Panel A MSS batch 1
+
+```{r}
+library(ggsci)
+library(ggpubr)
+
+palette <- readRDS("../../../other_data/palette_enriched_100.rds")
+
+gr_modelling <- readRDS("../../../barcode_tables/MSS_batch1/growth_modelling_absolute_fitness.rds")
+
+expansion <- gr_modelling$res_exp %>% mutate(stage = "expansion")
+under_drug  <- gr_modelling$res_under_linear %>% mutate(stage = "under_drug")
+
+plot_df <- rbind(under_drug, expansion) 
+
+plot_df <- inner_join(plot_df, gr_modelling$abuandances %>% mutate(rep = as.character(rep))) 
+
+plot_df_mean <- plot_df %>% group_by(stage, sample, real_bc44) %>% dplyr::summarise(growth_rate = mean(growth_rate),max_perc = mean(max_perc))
+
+plot_df_mean <- plot_df_mean %>% mutate(sample = gsub("AZD", "Capivasertib", sample) ) %>% 
+  mutate(sample = gsub("KU", "KU-0063794", sample) ) %>% 
+  mutate(sample = gsub("MK", "MK-2206", sample) ) %>% mutate(sample = gsub("->", " -> ", sample))
+
+plot_df_mean$sample <- factor(plot_df_mean$sample, levels = c(
+  "Control","DMSO", "MK-2206" , "Capivasertib", "KU-0063794", 
+  "Trametinib", "MK-2206 -> Trametinib", "Capivasertib -> Trametinib",
+  "KU-0063794 -> Trametinib", "Trametinib -> MK-2206", "Trametinib -> Capivasertib"
+))
+
+panel_a <- ggplot(data = plot_df_mean  %>% filter(max_perc > 1e-3, !(sample %in% c("DMSO", "Control"))), aes(x = growth_rate, fill = stage)) + geom_histogram(bins = 100) + theme_classic() + xlab("Relative fitness") +  scale_fill_manual("Stage", values = c("firebrick2", "grey40")) + facet_wrap(~sample, scales = "free_y") + ggtitle("Relative fitness distribution for each condition", subtitle = "For barcodes with max abundance > 1%% (AKT batch 1)")  + geom_vline(xintercept = 0, linetype = 2) + xlim(-0.5,0.5) + theme(text=element_text(size=FONT_SIZE,  family="Arial"), axis.text.x  = element_text(angle = 45, hjust = 1), legend.position = "bottom")
+
+
+
+
+```
+
+## Panel B MSS batch 2
+
+```{r}
+gr_modelling <- readRDS("../../../barcode_tables/MSS_batch2/growth_modelling_absolute_fitness.rds")
+
+expansion <- gr_modelling$res_exp %>% mutate(stage = "expansion")
+under_drug  <- gr_modelling$res_under_linear %>% mutate(stage = "under_drug")
+
+plot_df <- rbind(under_drug, expansion) 
+
+plot_df <- inner_join(plot_df, gr_modelling$abuandances %>% mutate(rep = as.character(rep))) 
+
+plot_df_mean <- plot_df %>% group_by(stage, sample, real_bc44) %>% dplyr::summarise(growth_rate = mean(growth_rate),max_perc = mean(max_perc))
+
+plot_df_mean <- plot_df_mean %>% mutate(sample = gsub("OXA", "Oxaliplatin", sample) ) %>% 
+  mutate(sample = gsub("ERK", "SCH772984", sample) ) 
+
+plot_df_mean <- plot_df_mean %>% filter(grepl("AKT", sample), grepl("Parental", sample)) %>% 
+  mutate(sample = gsub("AKT-","",sample)) %>%  mutate(sample = gsub("Parental-","",sample))
+
+plot_df_mean$sample <- factor(plot_df_mean$sample, levels = c(
+  "DMSO","Oxaliplatin", "SCH772984" 
+))
+
+panel_b <- ggplot(data = plot_df_mean  %>% filter(max_perc > 1e-3, !(sample %in% c("DMSO", "Control"))), aes(x = growth_rate, fill = stage)) + geom_histogram(bins = 100) + theme_classic() + xlab("Relative fitness") +  scale_fill_manual("Stage", values = c("firebrick2", "grey40")) + facet_wrap(~sample, scales = "free_y") + ggtitle("Relative fitness distribution for each condition", subtitle = "For barcodes with max abundance > 1%% (AKT batch 2)")  + geom_vline(xintercept = 0, linetype = 2) + xlim(-0.5,0.5) + theme(text=element_text(size=FONT_SIZE,  family="Arial"), axis.text.x  = element_text(angle = 45, hjust = 1), legend.position = "bottom")
+
+```
+
+## Panel C MSI
+
+```{r}
+gr_modelling <- readRDS("../../../barcode_tables/MSI/growth_modelling_absolute_fitness.rds")
+
+expansion <- gr_modelling$res_exp %>% mutate(stage = "expansion")
+under_drug  <- gr_modelling$res_under_linear %>% mutate(stage = "under_drug")
+
+plot_df <- rbind(under_drug, expansion) 
+
+plot_df <- inner_join(plot_df, gr_modelling$abuandances %>% mutate(rep = as.character(rep))) 
+
+plot_df_mean <- plot_df %>% group_by(stage, sample, real_bc44) %>% dplyr::summarise(growth_rate = mean(growth_rate),max_perc = mean(max_perc))
+
+plot_df_mean <- plot_df_mean %>% mutate(sample = gsub("OXA", "Oxaliplatin", sample) ) %>% 
+  mutate(sample = gsub("ERK", "SCH772984", sample) ) 
+
+plot_df_mean <- plot_df_mean %>% filter(grepl("MSI", sample), grepl("Parental", sample)) %>% 
+  mutate(sample = gsub("MSI-","",sample)) %>%  mutate(sample = gsub("Parental-","",sample))
+
+plot_df_mean$sample <- factor(plot_df_mean$sample, levels = c(
+  "DMSO","Oxaliplatin", "SCH772984" 
+))
+
+panel_c <- ggplot(data = plot_df_mean  %>% filter(max_perc > 1e-3, !(sample %in% c("DMSO", "Control"))), aes(x = growth_rate, fill = stage)) + geom_histogram(bins = 100) + theme_classic() + xlab("Relative fitness") +  scale_fill_manual("Stage", values = c("firebrick2", "grey40")) + facet_wrap(~sample, scales = "free_y") + ggtitle("Relative fitness distribution for each condition", subtitle = "For barcodes with max abundance > 1%% (MSI)")  + geom_vline(xintercept = 0, linetype = 2) + xlim(-0.5,0.5) + theme(text=element_text(size=FONT_SIZE,  family="Arial"), axis.text.x  = element_text(angle = 45, hjust = 1), legend.position = "bottom")
+
+```
+
+```{r}
+
+bottom_plot <- ggpubr::ggarrange(panel_b, panel_c, nrow = 1, labels = c("B", "C"), 
+                                  font.label = list(size = 20 , family = "Arial"))
+
+supp_4 <- ggpubr::ggarrange(panel_a, bottom_plot, nrow = 2, labels = c("A", ""),
+                               font.label = list(size = 20 , family = "Arial"), heights = c(1.8,1))
+
+supp_4 %>% ggsave(plot = ., "supplmentary_figure_4.pdf",height = 8, width = 6.5 ,device = cairo_pdf, dpi = 300, scale = 1.5, bg = "white")
+
+supp_4 %>% ggsave(plot = ., "supplmentary_figure_4.png",height = 8, width = 6.5, device = "png", dpi = 300, scale = 1.5, bg = "white")
+
+```
+
+# Supplementary 5 barplot MSS batch 2 parental only
+
+```{r}
+
+palette_AKT <- readRDS("../../../other_data/palette_enriched_100.rds")
+
+
+df_sc_erica_AKT <- readr::read_csv("../../../barcode_tables/MSS_batch2/novaseq_barcode_processed.csv") %>% dplyr::select(real_bc44, perc, drug, genotype, stage,barcode_type, rep, day, group) %>%
+  filter(genotype == "AKT", barcode_type == "DNA") %>% mutate(sample_name = paste0(drug,"_", group,"_",gsub("REP", "", rep))) 
+
+
+
+
+df_sc_erica_AKT_no_perturb <- df_sc_erica_AKT %>% filter(group == "Parental")
+  
+
+df_sc_erica_AKT_plot <- df_sc_erica_AKT_no_perturb %>% filter(barcode_type == "DNA") %>% mutate(rep = gsub("REP","", rep)) %>% 
+  select(perc, real_bc44, drug, genotype, rep) 
+
+
+
+df_sc_erica_AKT_no_perturb <-  df_sc_erica_AKT_no_perturb %>% mutate(drug_plot = gsub("1$", " - Under drug", drug) ) %>% 
+           mutate(drug_plot = gsub("2$", " - Re-growth", drug_plot) ) 
+
+df_sc_erica_AKT_no_perturb <- df_sc_erica_AKT_no_perturb %>%  mutate(drug_plot = gsub("ERK", "SCH772984",drug_plot)) %>%  mutate(drug_plot = gsub("OXA", "Oxaliplatin",drug_plot))
+
+df_sc_erica_AKT_no_perturb$drug_plot <-  factor(df_sc_erica_AKT_no_perturb$drug_plot , levels= c("DMSO" ,"Oxaliplatin - Under drug", "Oxaliplatin - Re-growth", "SCH772984 - Under drug" ,"SCH772984 - Re-growth" ))
+
+panel_a <- ggplot() + 
+geom_bar(df_sc_erica_AKT_no_perturb, mapping = aes(x = paste0(drug, rep), y = perc, fill = reorder(real_bc44, -perc)) ,stat="identity") +
+theme_classic()+ scale_fill_manual("BC44",values = palette_AKT) +
+facet_grid( . ~ drug_plot, scales = "free", space = "free") + xlab("Replicates") + ylab("%") +
+theme(legend.position= "None",axis.text.x =  element_blank(), axis.ticks.x = element_blank(), text = element_text(family = "Arial") ) + ggtitle("AKT organoid line (batch 2)") 
+
+```
+
+```{r}
+
+panel_a %>% ggsave(plot = ., "supplmentary_figure_5.pdf",height = 4, width = 6 ,device = cairo_pdf, dpi = 300, scale = 1.5, bg = "white")
+
+panel_a %>% ggsave(plot = ., "supplmentary_figure_5.png",height = 4, width = 6, device = "png", dpi = 300, scale = 1.5, bg = "white")
+
+```
+
+# Supplementary figure 6 no evident genetic differences
+
+```{r}
+library(CNAqc)
+
+mut_table <- readr::read_tsv("../../../other_data/AKT_mutect2.ann.all_plugins.VEP.tsv") %>% filter(FILTER == "PASS") 
+
+CNV_parental <- readr::read_tsv("../../../other_data/AZD_TRAM_vs_AKT_blood.cnvs.txt") %>% dplyr::rename(from = startpos, to = endpos, Major = nMajor, minor = nMinor)
+
+
+cnaqc_parental <- evoverse::pipeline_qc_copynumbercalls(mut_table %>% dplyr::rename(chr = CHROM, from = POS, ref = REF, alt = ALT) %>% 
+                                                          dplyr::mutate(to = from +  1, VAF = VAF_Parental, NV = NV_Parental, DP = DP_Parental, is_driver = FALSE) %>%
+                                                          dplyr::filter(NV > 0) , cna = CNV_parental, purity = 0.999)
+cnaqc_parental_phas <- cnaqc_parental$cnaqc$advanced_phasing
+
+CNV_AZD <- readr::read_tsv("../../../other_data/AZD_TRAM/AZD_TRAM_vs_AKT_blood.cnvs.txt") %>% dplyr::rename(from = startpos, to = endpos, Major = nMajor, minor = nMinor)
+
+
+cnaqc_AZD <- evoverse::pipeline_qc_copynumbercalls(mut_table %>% dplyr::rename(chr = CHROM, from = POS, ref = REF, alt = ALT) %>% 
+                                                          dplyr::mutate(to = from +  1, VAF = VAF_AZD_Trametinib, NV = NV_AZD_Trametinib, DP = DP_AZD_Trametinib , is_driver = FALSE) %>%
+                                                          dplyr::filter(NV > 0) , cna = CNV_AZD, purity = 0.999)
+cnaqc_AZD_phas <- cnaqc_AZD$cnaqc$advanced_phasing
+
+df_plot <- dplyr::inner_join(cnaqc_AZD_phas %>% mutate(CCF_AZD_T = CCF),cnaqc_parental_phas %>% mutate(CCF_parental = CCF), by = c("chr", "from", "to", "ref", "alt")) 
+
+supplementary_6  <- ggplot(df_plot %>% filter(( grepl("deleterious", `SIFT_tag.x`) | grepl("damaging",`PolyPhen_tag.x`) ) | `IMPACT.x` == "HIGH" ), aes(y = VAF_AZD_Trametinib.x, x = VAF_Parental.x, color = `IMPACT.x`)) + geom_point() + theme_bw() + scale_color_brewer(palette = "Accent") + ggrepel::geom_text_repel(data = df_plot %>% filter(( grepl("deleterious", `SIFT_tag.x`) | grepl("damaging",`PolyPhen_tag.x`) ) | `IMPACT.x` == "HIGH" , abs(VAF_AZD_Trametinib.x- VAF_Parental.x) > 0.15),mapping = aes(label = `SYMBOL.x`) ) + geom_abline(slope = 1, linetype = 2) + ggtitle("VAF in Parental vs Capivasertib->Trametinib treated organoid") + theme(legend.position = "none") + facet_wrap(~ `IMPACT.x`) + xlab("Parental") + ylab("Capivasertib->Trametinib")
+
+panel_e_2 <- ggplot(mut_table %>% filter(( grepl("deleterious", SIFT_tag) | grepl("damaging",PolyPhen_tag) ) | IMPACT == "HIGH",  abs(VAF_Parental - VAF_AZD_Trametinib) > 0.1), aes(y = VAF_AZD_Trametinib, x = VAF_Parental, color = IMPACT, label = SYMBOL)) + geom_point() + theme_bw() + scale_color_brewer(palette = "Accent") + ggrepel::geom_text_repel() + geom_abline(slope = 1, linetype = 2) + ggtitle("Da Rifare con recall") + theme(legend.position = "bottom") 
+
+ggsave("supplementary_figure_6.pdf", supplementary_6, device = "pdf", dpi = 300, width = 10, height = 5.5, scale = 1.2)
+
+```
+
+# Supplementary figure 7 copy number distribution
+
+```{r}
+library(matrixStats)
+library(tidyverse)
+
+CNV <- readr::read_csv("../../../copy_number_data/lowpass/Delbruck_lpWGS_experiments.csv")
+CNV <- CNV[,!grepl("CENPE", colnames(CNV))]
+CNV2 <- CNV
+r_id <- apply(CNV[,1:3], 1, function(x) paste(x , collapse= ":")) %>% as.vector()
+CNV <- as.matrix(CNV[,-c(1,2,3)])
+CNV <- apply(CNV, 2, function(x) x - CNV[,"Parental"])
+
+CNV2 <- CNV2
+CNV2 <- as.matrix(CNV2[,-c(1,2,3)])
+CNV2 <- apply(CNV2, 2, function(x) x - CNV[,"Parental"])
+
+cl <- hclust(dist(CNV2 %>% t(), method = "binary"), method = "average")
+ord <- 1:25
+ord <- cl$order
+names(ord) <- cl$labels %>%  gsub("AZD", "Capivasertib_", .) %>% 
+  gsub("KU", "KU-0063794_", .) %>% 
+  gsub("MK", "MK-2206_", .) %>% 
+  gsub("T", "Trametinib_", .) %>% 
+  gsub("__", "->", .)  %>% 
+  gsub("_", "_Rep",.)
+  
+CNV <- CNV[rowMaxs(abs(CNV)) < 6,]
+r_id <- r_id[which(rowMaxs(abs(CNV)) < 6)]
+
+CNV <- CNV %>% as_tibble() %>%
+  mutate(ids = r_id) %>% separate(ids, into = c("chr", "from", "to"), sep = ":") %>% 
+  pivot_longer(AZD_T1:T_MK3, names_to = "sample_id", values_to = "CNA") %>% 
+  mutate(from = as.numeric(from), to = as.numeric(to))
+
+
+CNV <- CNV %>% mutate(sample_id = gsub("AZD", "Capivasertib_", sample_id) ) %>% 
+  mutate(sample_id = gsub("KU", "KU-0063794_", sample_id) ) %>% 
+  mutate(sample_id = gsub("MK", "MK-2206_", sample_id) )%>% 
+  mutate(sample_id = gsub("T", "Trametinib_", sample_id) ) %>% 
+  mutate(sample_id = gsub("__", "->", sample_id) ) %>% 
+  mutate(sample_id = gsub("_", "_Rep", sample_id) )
+
+
+reference_genome = CNAqc:::get_reference("hg38")
+vfrom = reference_genome$from
+names(vfrom) = reference_genome$chr
+CNV <- CNV %>% mutate(chr = paste0("chr", chr))%>% mutate(from = from + vfrom[chr], to = to + vfrom[chr])
+
+reference_coordinates = CNAqc:::get_reference("hg38")
+low = min(reference_coordinates$from)
+upp = max(reference_coordinates$to)
+bl_plot = ggplot2::ggplot(reference_coordinates) + CNAqc:::my_ggplot_theme(cex = cex) + 
+    ggplot2::geom_segment(ggplot2::aes(x = centromerStart, 
+        xend = centromerEnd, y = 0, yend = Inf), size = 0.1, 
+        color = "black", linetype = 8)
+bl_plot = bl_plot + ggplot2::geom_rect(data = reference_coordinates, 
+    ggplot2::aes(xmin = from, xmax = from, ymin = 0, ymax = Inf), 
+    alpha = 1, colour = "grey")
+bl_plot = bl_plot + ggplot2::geom_hline(yintercept = 0, size = 1, colour = "gainsboro") + ggpubr::rotate_y_text() + 
+    ggplot2::scale_x_continuous(breaks = c(0, reference_coordinates$centromerStart, 
+        upp), labels = c("", gsub(pattern = "chr", replacement = "", 
+        reference_coordinates$chr), ""))
+
+CNV$CNA <- factor(CNV$CNA, levels = c("-3","-1","0","1","2"))
+
+
+
+supplementary_7 <- bl_plot + geom_rect(CNV %>% mutate(ymin = ord[sample_id], ymax = ord[sample_id]),mapping = aes(xmin=from, xmax=to, ymin=ymin, ymax=ymax + 1, fill = CNA)) + CNAqc:::my_ggplot_theme() +
+  scale_fill_brewer("Diff CN ",palette = "RdBu", direction = -1) + scale_y_binned(labels = ord %>% sort() %>% names(), n.breaks = length(unique(CNV$sample_id))) + ylab("") + ggtitle("CN distribution with lpWGS", subtitle = "Difference in CN against parental (-6 < CNA < 6)")  + xlab("Chromosome") 
+
+ggsave( "supplementary_figure_7.pdf", supplementary_7, device = "pdf", dpi = 300, width = 12, height = 5.5, scale = 1.2)
+```
+
+
+
+
+
+# Supplementary 8 scRNA-seq barcodes
+
+```{r}
+library(Seurat)
+library(ggpubr)
+library(SCpubr)
+library(dplyr)
+library(RColorBrewer)
+extrafont::loadfonts()
+
+FONT_SIZE <- 12
+
+palette <- readRDS("../../../other_data/palette_enriched_100.rds")
+seurat_scrna_seq <- readRDS("../../../seurat_objects/MSS_batch1/seur_merged_norm_integrated_with_atlas_no_magic.rds")
+```
+
+
+```{r}
+p_bc44_umap <- do_DimPlot(seurat_scrna_seq,   group.by = "bc44", shuffle = TRUE, legend.title.position = "bottom", legend.title = "Treatment Window") + ggtitle("Lentiviral barcode distribution") + scale_color_manual("",values = palette) + theme(text=element_text(size=FONT_SIZE,  family="Arial"), legend.position = "None", plot.title = element_text(hjust = 0.5))
+p_bc44_umap
+```
+
+
+```{r}
+p_perc <- barcodes_distribution_annot %>%  group_by(drug1,drug2,stage,treatment_window) %>% filter(stage != "parental") %>% 
+ggplot(., aes(x = reorder(paste0(drug1, if_else(is.na(drug2),"", paste0("->", gsub("Rep", "",drug2)))),perc_barcodes), y = perc_barcodes, fill = reorder(bc44, -perc_barcodes))) + 
+geom_col() + scale_fill_manual(values = palette) +
+xlab("") + ylab("%bc44") + facet_grid(stage ~ treatment_window, scales = "free_x", labeller = as_labeller(labeller_supps56)) +
+theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1, size=FONT_SIZE,  family="Arial")) + theme(legend.position = "None", text=element_text(size=FONT_SIZE,  family="Arial")) + 
+  ggtitle("Barcodes abundances in treated scRNA-seq")
+p_perc
+```
+
+
+```{r}
+p_parent <- barcodes_distribution_annot %>%  group_by(drug1,drug2,stage,treatment_window) %>% filter(stage == "parental") %>% 
+ggplot(., aes(x = "Parental", y = perc_barcodes, fill = reorder(bc44, -perc_barcodes))) + 
+geom_col() + scale_fill_manual(values = palette) +
+xlab("") + ylab("%bc44") + 
+theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1, size=FONT_SIZE,  family="Arial")) + theme(legend.position = "None", text=element_text(size=FONT_SIZE,  family="Arial")) + 
+  ggtitle("Barcodes abundances\nin parental scRNA-seq")
+p_parent
+```
+
+
+```{r}
+p_umap <- ( p_parent | p_perc | p_bc44_umap ) + patchwork::plot_layout(widths = c(0.4, 1,1)) + plot_annotation(tag_levels = 'A')
+
+p_umap %>% ggsave(filename = "supplementary_figure_8.png",plot = ., device = "png", width = 3300, height = 1500, units = "px", dpi = 300 , scale = 1.6)
+p_umap %>% ggsave(filename = "supplementary_figure_8.pdf",plot = ., device = "pdf", width = 3300, height = 1500, units = "px", dpi = 300 , scale = 1.6)
+
+```
+
+
+
+

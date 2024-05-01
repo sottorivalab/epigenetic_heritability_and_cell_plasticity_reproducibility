@@ -1,0 +1,235 @@
+---
+title: "scRNA-seq analysis"
+author: "Salvatore Milite"
+date: "18/05/2023"
+output: html_document
+---
+
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(tidyverse)
+library(Matrix)
+```
+
+# Data load and doublet removal 
+
+```{r}
+dir <- "/group/sottoriva/00-PROCESSED_DATA/2023-ERICA/DRUG_EXPERIMENT/scRNA_seq/final_run/"
+
+samples <- list.dirs(dir, full.names = T, recursive = T) %>% grep(x = ., "filtered_feature_bc_matrix", value = T)
+
+all_mats <- lapply(samples, function(f) Seurat::Read10X(f))
+
+nms_10x <- samples %>% gsub("^/group.*final_run_noNF//", "",.) %>%  gsub("L75_0010_10_MSI_CENPE_Oxaliplatin", "L75_0010_10_MSI_CENPE_MPS1_Oxaliplatin", .)  %>%
+  gsub("/outs/.*$", "", .) %>% gsub("^L75_00[0-9][0-9]_","",.) %>% gsub("^[0-9][0-9]?_", "", .) %>% gsub("AKT_CENPE_MPS1_ERKi_MSI_ERKi", "MSI_CENPE_MPS1_ERKi",., fixed = T)
+names(all_mats) <- nms_10x
+
+all_mats$AKT_DMSO_REPEAT <- NULL
+all_mats$MSI_CENPE_MPS1_Oxaliplatin_REPEAT_MORE_EXPANSION <- NULL
+
+all_mats <- all_mats[sort(names(all_mats))]
+```
+
+```{r}
+seur_all <- mapply(all_mats,names(all_mats), FUN = function(x,y) CreateSeuratObject(counts = x, project = y, min.cells = 3, min.features = 200), SIMPLIFY = F)
+
+names(seur_all) <- names(all_mats)
+
+```
+
+
+# Add barcodes 
+
+```{r}
+bc_file <- readRDS("../tmp_data/scRNA_seq_barcodes_enriched.rds")
+
+bc_file$MSI_CENPE_MPS1_Oxaliplatin_REPEAT_MORE_EXPANSION <- NULL
+bc_file <- bc_file[sort(names(bc_file))]
+
+all(names(seur_all) == names(bc_file))
+
+
+for (i in 1:length(all_mats)){
+  
+  bc_meta1 <-  bc_file[[i]]$real_bc44 %>% as.data.frame()
+  bc_meta2 <-  bc_file[[i]]$n_active_bar %>% as.data.frame()
+  
+  rownames(bc_meta1) <- paste0(bc_file[[i]]$cell_barcode %>% as.character(), "-1")
+  rownames(bc_meta2) <-  paste0(bc_file[[i]]$cell_barcode %>% as.character(),  "-1")
+    
+  seur_all[[i]] <- Seurat::AddMetaData(seur_all[[i]], metadata = bc_meta1, col.name = 
+                                         "bc44")
+  seur_all[[i]] <- Seurat::AddMetaData(seur_all[[i]], metadata = bc_meta2, col.name = 
+                                         "n_active_bar")
+}
+```
+```{r}
+seur_merged <- merge(seur_all[[1]], y = seur_all[2:28], add.cell.ids = names(seur_all), project = "erica_sc_growth")
+
+seur_merged %>% saveRDS(., file = 
+                          "../tmp_data/seur_merged.rds")
+```
+
+
+```{r}
+seur_AKT <- seur_merged[,grepl(seur_merged$orig.ident, pattern = "AKT")]
+seur_MSI <- seur_merged[,grepl(seur_merged$orig.ident, pattern = "MSI")]
+
+seur_AKT %>% saveRDS(., file = "../tmp_data/seur_AKT.rds")
+seur_MSI %>% saveRDS(., file = "../tmp_data/seur_MSI.rds")
+
+
+```
+
+Standard QC
+
+```{r}
+
+seur_merged[["percent.mt"]] <- PercentageFeatureSet(seur_merged, pattern = "^MT-")
+VlnPlot(seur_merged, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"))  
+
+```
+
+```{r}
+
+plot1 <- FeatureScatter(seur_merged, feature1 = "nCount_RNA", feature2 = "percent.mt")+ ggplot2::scale_x_log10()
+plot2 <- FeatureScatter(seur_merged, feature1 = "nCount_RNA", feature2 = "nFeature_RNA") + ggplot2::scale_x_log10()  + scale_y_log10()+ geom_vline(xintercept = 200000, linetype = 2, color = "indianred", size = 1.5) + geom_hline(yintercept = 500, linetype = 2, color = "indianred", size = 1.5)
+plot1 + plot2
+```
+
+
+
+```{r}
+
+seur_merged_filt <- subset(seur_merged, subset = nFeature_RNA > 500 & nCount_RNA < 200000)
+
+```
+
+# Normalize and scale
+
+```{r}
+
+seur_merged_filt <- NormalizeData(seur_merged_filt)
+
+seur_merged_filt <- FindVariableFeatures(seur_merged_filt, selection.method = "vst", nfeatures = 3000)
+
+seur_merged_filt <- ScaleData(seur_merged_filt, features = rownames(seur_merged_filt))
+
+```
+
+```{r}
+top20 <- head(VariableFeatures(seur_merged_filt), 20)
+
+plot1 <- VariableFeaturePlot(seur_merged_filt)
+plot2 <- LabelPoints(plot = plot1, points = top20, repel = TRUE)
+plot1 + plot2
+```
+
+
+```{r}
+seur_merged_filt <- RunPCA(seur_merged_filt, features = VariableFeatures(object = seur_merged_filt), verbose = F)
+
+```
+
+
+```{r}
+DimPlot(seur_merged_filt, reduction = "pca")
+
+```
+
+```{r}
+ElbowPlot(seur_merged_filt, ndims = 50)
+
+```
+
+```{r}
+
+seur_merged_filt <- FindNeighbors(seur_merged_filt, dims = 1:40)
+seur_merged_filt <- FindClusters(seur_merged_filt, resolution = 0.5 )
+
+```
+
+```{r}
+seur_merged_filt <- RunUMAP(seur_merged_filt, dims = 1:40)
+
+seur_merged_filt <- CellCycleScoring(seur_merged_filt, s.features = cc.genes$s.genes, g2m.features = cc.genes$g2m.genes, set.ident = F)
+
+```
+
+```{r}
+library(patchwork)
+
+seur_merged_filt@meta.data$has_bc <- ifelse(is.na(seur_merged_filt@meta.data$bc44), FALSE, TRUE)
+seur_merged_filt@meta.data$sample_id <- seur_merged_filt@meta.data$orig.ident
+
+
+p1 <- DimPlot(seur_merged_filt, reduction =  "umap", group.by = "has_bc")
+p2 <- DimPlot(seur_merged_filt, reduction = "umap", group.by = "orig.ident")
+p3 <- FeaturePlot(seur_merged_filt, reduction = "umap", features = c("nCount_RNA")) 
+p4 <- DimPlot(seur_merged_filt, reduction = "umap", group.by = "Phase") 
+
+(p1 | p2) / (p3 | p4)
+```
+
+```{r}
+meta <- seur_merged_filt@meta.data %>% tibble::rownames_to_column(var = "cell_name")
+barcodes_per_sample <- meta %>% group_by(sample_id) %>% summarize(perc_barcodes = sum(has_bc) / length(has_bc) , N_tot = length(has_bc))
+
+
+pb1 <- barcodes_per_sample %>% ggplot(., aes(reorder(sample_id, perc_barcodes), perc_barcodes)) + geom_col() + 
+xlab("") + ylab("%cells with barcode") +
+theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+pb2 <- barcodes_per_sample %>% ggplot(., aes(reorder(sample_id, perc_barcodes), N_tot)) + geom_col() + 
+xlab("") + ylab("#cells") +
+theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+(pb1 / pb2) |> ggplot2::ggsave(filename = "../plots/scRNA_seq/barcodes/bacrode_distribution_scRNA_seq.png", device = "png", width = 18, height = 12)
+```
+```{r}
+palette
+
+p_perc <- barcodes_per_sample %>%  group_by(drug1,drug2,stage,treatment_window) %>% filter(stage != "parental") %>% 
+ggplot(., aes(x = reorder(paste0(drug1, if_else(is.na(drug2),"", paste0("->", gsub("Rep", "",drug2)))),perc_barcodes), y = perc_barcodes, fill = reorder(bc44, -perc_barcodes))) + 
+geom_col() + scale_fill_manual(values = palette) +
+xlab("") + ylab("%bc44") + facet_grid(stage ~ treatment_window, scales = "free_x") +
+theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + theme(legend.position = "None") + ggtitle("top 100 barcodes distribution")
+p_perc
+```
+
+
+```{r}
+
+genes <- list("Stem" = c("LGR5", "ASCL2", "SMOC2", "RGMB", "OLFM4"),
+              "Enterocytes" = c("RBP2", "ANPEP", "FABP2"),
+              "Paneth" = c("DEFA5", "DEFA6", "LY6D"),
+              "Goblet" = c("CLCA1", "SPDEF", "FCGBP", "ZG16", "MUC2", "TFF3"),
+              "Enteroendocrine" = c("CHGA", "CHGB", "NEUROD1"),
+              "Microfold" = c("SPIB", "CCL20", "GP2"),
+              "Colonocytes" = c("CA2", "SLC26A2", "FABP1"),
+              "TA (proliferative)"= c("MKI67", "TOP2A", "PCNA")
+              )
+
+
+library(RColorBrewer)
+
+
+
+
+p1 <- SCpubr::do_DotPlot(sample = subset(seurat_scrna_seq_under), group.by = "name_plots",
+                         features = genes, cluster = T,scale = T,use_viridis = F,
+                         plot.title = "Maker genes expression in MSI samples", sequential.palette = "RdBu", sequential.direction = -1) 
+
+p2 <- SCpubr::do_DotPlot(sample = seurat_scrna_seq_exp, 
+                         features = genes, cluster = T,scale = T,sequential.palette = "RdBu",
+                         plot.title = "Maker genes expression in AKT sample", colors.use = c("blue", "white","red"))
+
+(p1 / p2) %>% ggsave(filename = "../plots/scRNA_seq/marker_genes_expression.png",width = 12, height = 8 , scale = 1.5)
+
+
+```
+
+
+

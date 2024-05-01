@@ -1,0 +1,467 @@
+---
+title: "Figure 5"
+author: "Salvatore Milite"
+date: "02/02/2023"
+output: html_document
+---
+
+# Main Figures 
+
+
+```{r}
+library(Seurat)
+library(ggpubr)
+library(SCpubr)
+library(dplyr)
+library(RColorBrewer)
+library(Matrix)
+
+extrafont::loadfonts(quiet = T)
+
+source("../figure_utils.R")
+#devtools::load_all("/home/salvatore.milite/work/r_packages/scUtils/")
+
+FONT_SIZE <- 12
+```
+
+
+## Panel E mega heathmap MSI
+
+```{r}
+library(tidyverse)
+
+
+propr_barcodes_MSI <- readr::read_csv("../../../barcode_tables/MSI/novaseq_barcode_processed.csv") %>% dplyr::select(real_bc44, perc, drug, genotype, stage,barcode_type, rep, day, group) %>%
+  filter(genotype == "MSI", barcode_type == "DNA") %>% mutate(sample_name = paste0(drug,"_", group,"",gsub("REP", "", rep))) %>% 
+  reshape2::dcast(sample_name ~ real_bc44, value.var = "perc", fill = 0)
+
+
+propr_barcodes_MSI <- propr_barcodes_MSI %>%  filter(sample_name %in%  grep("(TREATED)|(_D[0-9])",sample_name, invert = T, value = T))
+
+cnames <- propr_barcodes_MSI$sample_name %>%  data.frame(cnames = .) %>%  separate(cnames, sep = "_", into = c("drug_1", "drug_2"))
+
+
+
+cnames$rep[!is.na(cnames$drug_2)] <- sapply(cnames$drug_2[!is.na(cnames$drug_2)], function(x) substr(x,nchar(x),nchar(x)))
+cnames$rep[is.na(cnames$drug_2)] <- sapply(cnames$drug_1[is.na(cnames$drug_2)], function(x) substr(x,nchar(x),nchar(x)))
+
+cnames$drug_2[!is.na(cnames$drug_2)] <- sapply(cnames$drug_2[!is.na(cnames$drug_2)], function(x) substr(x,0,nchar(x)-1))
+cnames$drug_1[is.na(cnames$drug_2) & !(cnames$drug_1 %in% c("Parental", "CENPE", "CENPE_MPS1"))] <- sapply(cnames$drug_1[is.na(cnames$drug_2) & !(cnames$drug_1 %in% c("Parental", "CENPE", "CENPE_MPS1"))], function(x) substr(x,0,nchar(x)-1))
+
+cnames$stage <- ifelse(grepl("(OXA1)|(ERK1)", cnames$drug_1), "ud", "rg")
+cnames$stage <- ifelse(grepl("Parental", cnames$drug_1), "", cnames$stage)
+
+
+cnames_final <- cnames$drug_1
+
+cnames_final[!(cnames$drug_1 %in% c("ERK", "OXA"))] <- paste0(cnames$drug_2[!(cnames$drug_1 %in% c("ERK", "OXA"))], "->", 
+                                                                      cnames$drug_1[!(cnames$drug_1 %in% c("ERK", "OXA"))], "_", 
+                                                                      cnames$stage[!(cnames$drug_1 %in% c("ERK", "OXA"))], "_",
+                                                                      cnames$rep[!(cnames$drug_1 %in% c("ERK", "OXA"))])
+
+cnames_final[cnames$drug_1 %in% c("ERK", "OXA")] <- paste0(cnames$drug_1[cnames$drug_1 %in% c("ERK", "OXA")], "->", 
+                                                                   cnames$drug_2[cnames$drug_1 %in% c("ERK", "OXA")], "_", cnames$stage
+                                                                   [cnames$drug_1 %in% c("ERK", "OXA")], "_", 
+                                                                   cnames$rep[cnames$drug_1 %in% c("ERK", "OXA")])
+
+propr_barcodes_MSI$sample_name <- cnames_final %>%   gsub("ERK[12]", "SCH772984",.)  %>% 
+  gsub("OXA[12]", "Oxaliplatin",.)   %>% gsub("Parental->", "",.)
+```
+
+
+```{r}
+
+input_expcin <- read.csv("../../../copy_number_data/lowpass/CRC0282_full_cn_data.csv", row.names = 1) %>% rownames_to_column("tmp") %>%
+  separate(tmp, into = c("chr", "from", "to"), sep = c("[:-]"))
+
+input_expcin <- input_expcin[,  grep("(TREATED)|(_D[0-9])",colnames(input_expcin), invert = T)]
+
+colnames(input_expcin) <-  case_when(
+  grepl(colnames(input_expcin), pattern = "_CM", fixed = T) ~ gsub("_CM", "_CENPE + MPS1_", colnames(input_expcin)),
+  grepl(colnames(input_expcin), pattern = "_C", fixed = T) ~ gsub("_C", "_CENPE_", colnames(input_expcin)),
+  grepl(colnames(input_expcin), pattern = "_P", fixed = T) ~ gsub("_P","_Parental_", colnames(input_expcin)),
+  grepl(colnames(input_expcin), pattern = "NT", fixed = T) ~ gsub("NT","NOT TREATED_", colnames(input_expcin)),
+  TRUE~colnames(input_expcin) 
+)
+
+cnames <- colnames(input_expcin)[4:ncol(input_expcin)] %>%  data.frame(cnames = .) %>%  separate(cnames, sep = "_", into = c("drug_1", "drug_2", "rep"))
+
+cnames$stage <- ifelse(grepl("(OXA1)|(ERK1)", cnames$drug_1), "ud", "rg")
+cnames$stage <- ifelse(grepl("Parental", cnames$drug_1), "", cnames$stage)
+
+
+cnames_final <- cnames$drug_1
+
+cnames_final[!(cnames$drug_1 %in% c("ERK", "OXA"))] <- paste0(cnames$drug_2[!(cnames$drug_1 %in% c("ERK", "OXA"))], "->", 
+                                                                      cnames$drug_1[!(cnames$drug_1 %in% c("ERK", "OXA"))], "_", 
+                                                                      cnames$stage[!(cnames$drug_1 %in% c("ERK", "OXA"))], "_",
+                                                                      cnames$rep[!(cnames$drug_1 %in% c("ERK", "OXA"))])
+
+cnames_final[cnames$drug_1 %in% c("ERK", "OXA")] <- paste0(cnames$drug_1[cnames$drug_1 %in% c("ERK", "OXA")], "->", 
+                                                                   cnames$drug_2[cnames$drug_1 %in% c("ERK", "OXA")], "_", cnames$stage
+                                                                   [cnames$drug_1 %in% c("ERK", "OXA")], "_", 
+                                                                   cnames$rep[cnames$drug_1 %in% c("ERK", "OXA")])
+
+colnames(input_expcin)[4:ncol(input_expcin)] <- cnames_final %>%   gsub("ERK[12]", "SCH772984",.)  %>% 
+  gsub("OXA[12]", "Oxaliplatin",.) %>% gsub("NA->", "",.) %>% 
+  gsub("__NA", "",.) %>% gsub("Parental->", "",.)
+```
+
+
+
+```{r}
+library(ComplexHeatmap)
+
+palette_MSI <- readRDS("../../../other_data/palette_MSI.rds")
+
+cyto <- readr::read_tsv("http://hgdownload.cse.ucsc.edu/goldenPath/hg38/database/cytoBand.txt.gz", col_names = F) %>%
+  filter(X5 == "acen", grepl("q", X4))
+
+centromeric_positions <- cyto$X2
+names(centromeric_positions) <- cyto$X1
+
+common_cols_plot <- intersect(propr_barcodes_MSI$sample_name, input_expcin %>% dplyr::select(-chr,-from,-to) %>% t() %>% rownames())
+
+common_cols_plot <- grep("(TREATED)|(D[0-9])",common_cols_plot, invert = T, value = T)
+
+
+rownames(propr_barcodes_MSI) <- propr_barcodes_MSI$sample_name
+propr_barcodes_MSI_plot <- propr_barcodes_MSI[common_cols_plot,-1]
+
+
+
+ha = rowAnnotation(bar = anno_barplot(propr_barcodes_MSI_plot, gp = gpar(fill = palette_MSI[colnames(propr_barcodes_MSI_plot)]), border = FALSE),show_legend = FALSE, show_annotation_name = FALSE,
+                   width = unit(2.2, "cm"))
+tp = as.matrix(input_expcin)[,common_cols_plot] %>% t() %>% as.numeric() %>% matrix(nrow =  ncol(as.matrix(input_expcin)[,common_cols_plot]))
+rownames(tp) <- common_cols_plot
+
+breaks <- c(0, 2, 4)
+colors <- c("steelblue", "white","indianred")
+col_fun <- colorRamp2::colorRamp2(breaks, colors)
+
+to_split <- input_expcin$chr
+to_split <- factor(to_split, levels = gtools::mixedsort(to_split %>% unique))
+
+h1 <- Heatmap(  tp , name = "chr_values", 
+        row_title = "", 
+        column_names_gp = gpar(fontsize = 12), 
+        row_names_gp = gpar(fontsize = 9), 
+        heatmap_legend_param = list(title = "CN", labels = c("0","1", "2", "3", "4+"), direction = "horizontal"),
+        right_annotation  = ha,
+        show_column_names = FALSE,      
+        column_title_gp = gpar(fontsize = 10),
+        
+        cluster_columns =  FALSE, col = col_fun,
+        column_split = to_split, border = TRUE, column_gap = unit(0, "mm")) 
+
+pdf("panels/figure_5_panel_e.pdf", width = 16, height = 8)
+draw(h1,  heatmap_legend_side="bottom", padding = unit(c(2, 2, 2, 20), "mm"))
+dev.off()
+```
+
+
+
+
+## Panel F mega heathmap AKT
+```{r}
+propr_barcodes_AKT_expcin <- readr::read_csv("../../../barcode_tables/MSS_batch2/novaseq_barcode_processed.csv") %>% dplyr::select(real_bc44, perc, drug, genotype, stage,barcode_type, rep, day, group) %>%
+  filter(genotype == "AKT", barcode_type == "DNA") %>% mutate(sample_name = paste0(drug,"_", group,"",gsub("REP", "", rep))) %>% 
+  reshape2::dcast(sample_name ~ real_bc44, value.var = "perc", fill = 0)
+
+propr_barcodes_AKT_expevo <- readRDS("../../../barcode_tables/MSS_batch1/cells_barcodes_annotated.rds") %>% dplyr::select(real_bc44, perc, drug1, drug2, stage, rep, modality)  %>% 
+  filter( modality  == "DNA") %>% mutate(sample_name = paste0(drug1, if_else(!is.na(drug2), "_", ""), if_else(!is.na(drug2), drug2, ""),"",gsub("REP", "", rep))) %>% 
+  reshape2::dcast(sample_name ~ real_bc44, value.var = "perc", fill = 0)
+
+
+common_cols <- union(colnames(propr_barcodes_AKT_expevo), colnames(propr_barcodes_AKT_expcin))
+
+template1 <- matrix(0, nrow=nrow(propr_barcodes_AKT_expcin), ncol=length(common_cols), dimnames=list(row.names(propr_barcodes_AKT_expcin), common_cols))
+template2 <- matrix(0, nrow=nrow(propr_barcodes_AKT_expevo), ncol=length(common_cols), dimnames=list(row.names(propr_barcodes_AKT_expevo), common_cols))
+
+template1[, colnames(propr_barcodes_AKT_expcin)] <- propr_barcodes_AKT_expcin %>% as.matrix()
+template2[, colnames(propr_barcodes_AKT_expevo)] <- propr_barcodes_AKT_expevo %>% as.matrix()
+ 
+propr_barcodes_AKT <- rbind(template1,template2) %>%  as.data.frame()
+
+
+
+propr_barcodes_AKT <- propr_barcodes_AKT %>%  filter(sample_name %in%  grep("(TREATED)|(_D[0-9])|(OXA1)|(ERK1)",sample_name, invert = T, value = T))
+
+cnames <- propr_barcodes_AKT$sample_name %>%  data.frame(cnames = .) %>%  separate(cnames, sep = "_", into = c("drug_1", "drug_2"))
+
+
+
+cnames$rep[!is.na(cnames$drug_2)] <- sapply(cnames$drug_2[!is.na(cnames$drug_2)], function(x) substr(x,nchar(x),nchar(x)))
+cnames$rep[is.na(cnames$drug_2)] <- sapply(cnames$drug_1[is.na(cnames$drug_2)], function(x) substr(x,nchar(x),nchar(x)))
+
+cnames$drug_2[!is.na(cnames$drug_2)] <- sapply(cnames$drug_2[!is.na(cnames$drug_2)], function(x) substr(x,0,nchar(x)-1))
+cnames$drug_1[is.na(cnames$drug_2) & !(cnames$drug_1 %in% c("Parental", "CENPE", "CENPE_MPS1"))] <- sapply(cnames$drug_1[is.na(cnames$drug_2) & !(cnames$drug_1 %in% c("Parental", "CENPE", "CENPE_MPS1"))], function(x) substr(x,0,nchar(x)-1))
+
+cnames$stage <- ifelse(grepl("Parental", cnames$drug_1), "", "rg")
+
+cnames_final <- cnames$drug_1
+
+cnames_final[!(cnames$drug_1 %in% c("ERK", "OXA"))] <- paste0(cnames$drug_2[!(cnames$drug_1 %in% c("ERK", "OXA"))], "->", 
+                                                                      cnames$drug_1[!(cnames$drug_1 %in% c("ERK", "OXA"))], "_", 
+                                                                      cnames$stage[!(cnames$drug_1 %in% c("ERK", "OXA"))], "_",
+                                                                      cnames$rep[!(cnames$drug_1 %in% c("ERK", "OXA"))])
+
+cnames_final[cnames$drug_1 %in% c("ERK", "OXA")] <- paste0(cnames$drug_1[cnames$drug_1 %in% c("ERK", "OXA")], "->", 
+                                                                   cnames$drug_2[cnames$drug_1 %in% c("ERK", "OXA")], "_", cnames$stage
+                                                                   [cnames$drug_1 %in% c("ERK", "OXA")], "_", 
+                                                                   cnames$rep[cnames$drug_1 %in% c("ERK", "OXA")])
+
+
+cnames_final <-  cnames_final  %>% 
+  gsub("ERK1", "SCH772984",.) %>% gsub("ERK2", "SCH772984",.) %>% 
+  gsub("OXA1", "Oxaliplatin",.) %>% gsub("OXA2", "Oxaliplatin",.)   %>%  gsub("AZD", "Capivasertib", .)  %>% 
+  gsub("KU", "KU-0063794", . ) %>%  
+  gsub("MK", "MK-2206", .) %>% gsub("NA->", "", .) %>% 
+  gsub("__l", "",.) %>% gsub("Parental->", "", .) %>%  gsub("CENPE_MPS1", "CENPE + MPS1", .)%>%  
+  gsub("_[A-Z]$", "", .) 
+
+propr_barcodes_AKT$sample_name <- cnames_final
+```
+
+```{r}
+input_expevo <- read.csv("../../../copy_number_data/3994-117_full_cn_data.csv", row.names = 1) %>% rownames_to_column("tmp") %>%
+  separate(tmp, into = c("chr", "from", "to"), sep = c("[:-]"))
+
+input_expevo <- input_expevo[,  grep("(TREATED)|(_D[0-9])|(OXA1)|(ERK1)",colnames(input_expevo), invert = T)]
+
+cnames <- colnames(input_expevo)[4:length(colnames(input_expevo))] %>%  data.frame(cnames = .) %>%  separate(cnames, sep = "_", into = c("drug_1", "drug_2"))
+
+cnames <-  cnames %>% mutate( drug_2 = case_when(
+  grepl(drug_2, pattern = "CM[1-3]") ~ gsub("CM", "CENPE + MPS1", drug_2),
+  grepl(drug_2, pattern = "C[1-3]") ~ gsub("C", "CENPE", drug_2),
+  grepl(drug_2, pattern = "P[1-3]") ~ gsub("P","Parental", drug_2),
+  TRUE~drug_2 ))
+
+
+cnames$rep[!is.na(cnames$drug_2)] <- sapply(cnames$drug_2[!is.na(cnames$drug_2)], function(x) substr(x,nchar(x),nchar(x)))
+cnames$rep[is.na(cnames$drug_2)] <- sapply(cnames$drug_1[is.na(cnames$drug_2)], function(x) substr(x,nchar(x),nchar(x)))
+
+cnames$drug_2[!is.na(cnames$drug_2)] <- sapply(cnames$drug_2[!is.na(cnames$drug_2)], function(x) substr(x,0,nchar(x)-1))
+cnames$drug_1[is.na(cnames$drug_2) & !(cnames$drug_1 %in% c("Parental", "CENPE", "CENPE_MPS1"))] <- sapply(cnames$drug_1[is.na(cnames$drug_2) & !(cnames$drug_1 %in% c("Parental", "CENPE", "CENPE_MPS1"))], function(x) substr(x,0,nchar(x)-1))
+
+cnames$stage <- ifelse(grepl("Parental", cnames$drug_1), "", "rg")
+
+cnames_final <- cnames$drug_1
+
+cnames_final[!(cnames$drug_1 %in% c("ERK", "OXA"))] <- paste0(cnames$drug_2[!(cnames$drug_1 %in% c("ERK", "OXA"))], "->", 
+                                                                      cnames$drug_1[!(cnames$drug_1 %in% c("ERK", "OXA"))], "_", 
+                                                                      cnames$stage[!(cnames$drug_1 %in% c("ERK", "OXA"))], "_",
+                                                                      cnames$rep[!(cnames$drug_1 %in% c("ERK", "OXA"))])
+
+cnames_final[cnames$drug_1 %in% c("ERK", "OXA")] <- paste0(cnames$drug_1[cnames$drug_1 %in% c("ERK", "OXA")], "->", 
+                                                                   cnames$drug_2[cnames$drug_1 %in% c("ERK", "OXA")], "_", cnames$stage
+                                                                   [cnames$drug_1 %in% c("ERK", "OXA")], "_", 
+                                                                   cnames$rep[cnames$drug_1 %in% c("ERK", "OXA")])
+
+
+cnames_final <-  cnames_final  %>% 
+  gsub("ERK1", "SCH772984",.) %>% gsub("ERK2", "SCH772984",.) %>% 
+  gsub("OXA1", "Oxaliplatin",.) %>% gsub("OXA2", "Oxaliplatin",.)   %>%  gsub("AZD", "Capivasertib", .)  %>% 
+  gsub("KU", "KU-0063794", . ) %>% gsub("T", "Trametinib", . ) %>% 
+  gsub("MK", "MK-2206", .) %>% gsub("NA->", "", .) %>% 
+  gsub("__l", "",.) %>% gsub("Parental->", "", .) %>%  gsub("CENPE_MPS1", "CENPE + MPS1", .)%>%  
+  gsub("_[A-Z]$", "", .)
+
+colnames(input_expevo)[4:length(colnames(input_expevo))] <- cnames_final
+```
+
+```{r}
+library(ComplexHeatmap)
+
+palette_AKT <- readRDS("../../../other_data/palette_enriched_100.rds")
+
+not_high <- setdiff(colnames(propr_barcodes_AKT)[-1],names(palette_AKT))
+palette_small <- rep("grey", length(not_high))
+names(palette_small) <- not_high
+palette_AKT <- c(palette_small, palette_AKT)
+
+cyto <- readr::read_tsv("http://hgdownload.cse.ucsc.edu/goldenPath/hg38/database/cytoBand.txt.gz", col_names = F) %>%
+  filter(X5 == "acen", grepl("q", X4))
+
+centromeric_positions <- cyto$X2
+names(centromeric_positions) <- cyto$X1
+
+common_cols_plot <- intersect(propr_barcodes_AKT$sample_name, input_expevo %>% 
+                                dplyr::select(-chr,-from,-to) %>% t() %>% rownames())
+
+
+propr_barcodes_AKT <- propr_barcodes_AKT %>%  filter(sample_name %in% common_cols_plot)
+rownames(propr_barcodes_AKT) <- propr_barcodes_AKT$sample_name
+propr_barcodes_AKT_expevo_all_plot <- propr_barcodes_AKT[common_cols_plot,-1]
+
+
+propr_barcodes_AKT_expevo_all_plot <-sapply(propr_barcodes_AKT_expevo_all_plot, as.numeric)
+
+ha = rowAnnotation(bar = anno_barplot(propr_barcodes_AKT_expevo_all_plot, gp = gpar(fill = palette_AKT[colnames(propr_barcodes_AKT_expevo_all_plot)]), border = FALSE),show_legend = FALSE,
+                   show_annotation_name = FALSE, width = unit(2., "cm"))
+tp = as.matrix(input_expevo)[,common_cols_plot] %>% t() %>% as.numeric() %>% matrix(nrow =  ncol(as.matrix(input_expevo)[,common_cols_plot]))
+rownames(tp) <- common_cols_plot
+
+breaks <- c(1, 3, 5)
+colors <- c("steelblue", "white","indianred")
+col_fun <- colorRamp2::colorRamp2(breaks, colors)
+
+to_split <- input_expevo$chr
+to_split <- factor(to_split, levels = gtools::mixedsort(to_split %>% unique))
+
+h1 <- Heatmap(  tp , name = "chr_values", 
+        row_title = "", 
+        row_names_gp = gpar(fontsize = 12), 
+        heatmap_legend_param = list(title = "CN", labels = c("1", "2", "3", "4", "5+"), direction = "horizontal"),
+        right_annotation  = ha,
+        column_title_gp = gpar(fontsize = 10),
+        show_column_names = FALSE,
+        cluster_columns =  FALSE, col = col_fun,
+        column_split = to_split, border = TRUE, column_gap = unit(0, "mm")) 
+
+pdf("panels/figure_5_panel_f.pdf", width = 16, height = 11)
+draw(h1, heatmap_legend_side="bottom", padding = unit(c(2, 2, 2, 30), "mm"))
+dev.off()
+```
+## Panel G UMAPs CENPE MSI
+
+```{r}
+library(Seurat)
+library(ggpubr)
+library(SCpubr)
+library(dplyr)
+library(RColorBrewer)
+extrafont::loadfonts()
+
+FONT_SIZE <- 12
+
+palette_bc_MSI <- readRDS("../../../other_data/palette_MSI.rds")
+seur_merged_norm <- readRDS("../../../seurat_objects/MSI/seur_MSI_norm.rds")
+
+seur_merged_norm@meta.data <- seur_merged_norm@meta.data %>% mutate(drug2 = gsub("ERKi", "SCH772984", drug2) ) %>% 
+  mutate(drug2 = gsub("OXA", "Oxaliplatin", drug2) )  %>% mutate(drug1 = gsub("CENPE_MPS1", "CENPE + MPS1", drug1) )
+
+seur_merged_norm$drug1 <- factor(seur_merged_norm$drug1, levels = c("None", "CENPE", "CENPE + MPS1"))
+  
+stage_cols <- RColorBrewer::brewer.pal(3, "Set1")
+names(stage_cols) <- c("DMSO",   "under_drug", "expansion" )
+
+panel_a_plot1 <- do_DimPlot(seur_merged_norm,   group.by = "stage", shuffle = TRUE, legend.title.position = "left", legend.title = "Stage") + ggtitle("Experimental stage (MSI)") + scale_color_manual("",values = stage_cols, labels = c("DMSO", "Re-growth", "Under drug")) + theme(text=element_text(size=FONT_SIZE,  family="Arial"), plot.title = element_text(hjust = 0.5))
+
+
+drug_cols <- c(RColorBrewer::brewer.pal(6, "Dark2"), "grey50")
+names(drug_cols) <- c("MK-2206" , "Capivasertib", "KU-0063794", 
+  "Trametinib", "Oxaliplatin", "SCH772984", "DMSO")
+
+panel_a_plot2 <- do_DimPlot(seur_merged_norm ,   group.by = "drug2", shuffle = TRUE, legend.title.position = "left", legend.title = "Drug") + ggtitle("Treatments distributiion (MSI)") + scale_color_manual("",values = drug_cols) + theme(text=element_text(size=FONT_SIZE,  family="Arial"), plot.title = element_text(hjust = 0.5)) 
+
+
+panel_a_plot3 <- do_DimPlot(seur_merged_norm,   group.by = "bc44", shuffle = TRUE, legend.title.position = "left", legend.title = "Treatment Window") + ggtitle("Lentiviral barcode distribution (MSI)") + scale_color_manual("",values = palette_MSI) + theme(text=element_text(size=FONT_SIZE,  family="Arial"), legend.position = "None", plot.title = element_text(hjust = 0.5))
+
+
+preT_cols <- RColorBrewer::brewer.pal(3, "Pastel1")
+names(preT_cols) <- c("None" ,"CENPE",  "CENPE + MPS1")
+
+panel_a_plot4 <-do_DimPlot(seur_merged_norm,   group.by = "Phase", shuffle = TRUE, legend.title.position = "left", legend.title = "Drug") + ggtitle("Pre-Treatment (MSI)") + scale_color_manual("",values = preT_cols) + theme(text=element_text(size=FONT_SIZE,  family="Arial"), plot.title = element_text(hjust = 0.5))
+
+
+panel_g <- cowplot::plot_grid(plotlist = list(panel_a_plot1[[1]],panel_a_plot2[[1]],panel_a_plot3[[1]],panel_a_plot4[[1]]), ncol = 2, nrow = 2,align = "hv", labels  = c("A", "B", "C", "D"),
+                              font.label= list(size = 24, family = "Arial"), axis = "rltb") 
+
+
+panel_g %>% ggsave(filename = "panels/figure5_panel_g.pdf", height = 8, width = 6.9, scale = 1.5, device = "pdf")
+```
+
+
+## Panel H archetypes CENPE MSI
+
+```{r}
+
+arch_table_by_drug_MSI <-  readRDS("../../../archetype_params/MSI/data/arch_table_by_drug_MSI_batch2_RNA.rds") %>% mutate(drug2 = gsub("ERKi", "SCH772984", drug2) ) %>% 
+  mutate(drug2 = gsub("OXA", "Oxaliplatin", drug2) ) %>% mutate(stage = gsub("expansion", "re-growth", stage) ) %>% mutate(drug1 = gsub("CENPE_MPS1", "CENPE + MPS1", drug1) )
+
+arch_table_by_drug_MSI$drug1 <- factor(arch_table_by_drug_MSI$drug1, levels = c("None", "CENPE", "CENPE + MPS1"))
+
+palette_archs <- RColorBrewer::brewer.pal(length(arch_table_by_drug_MSI$archs %>% unique), "Set3")
+
+panel_h <- ggplot(arch_table_by_drug_MSI %>% group_by(stage , drug2, drug1) %>% mutate(N = length(unique(key)), group = paste0(stage) ) %>% ungroup() %>% 
+                 select(-key, -weights) %>% unique() , aes(x = fct_rev(group) , y = avg_prob, fill = archs )) + 
+    geom_col() + theme_bw() + labs(xlab = "%") + facet_grid( drug1 ~ drug2, scales = "free", space = "free", drop = TRUE) + RotatedAxis()   + scale_fill_manual("Archs", values  = palette_archs)  +
+  theme(text=element_text(size=FONT_SIZE + 3,  family="Arial"), plot.title = element_text(hjust = 0.5))  + xlab("")  + ggtitle("RNA archetypes distribution (MSI)")
+
+panel_h %>% ggsave(filename = "panels/figure5_panel_h.pdf",width = 6., height = 8.5 , scale = 1., device = "pdf")
+
+```
+
+
+## Panel I UMAPs CENPE AKT
+
+```{r}
+library(Seurat)
+library(ggpubr)
+library(SCpubr)
+library(dplyr)
+library(RColorBrewer)
+extrafont::loadfonts()
+
+FONT_SIZE <- 12
+
+palette_bc_AKT <- readRDS("../../../other_data/palette_enriched_100.rds")
+seur_merged_filt <- readRDS("../../../seurat_objects/MSS_batch2/seur_AKT_norm.rds")
+
+seur_merged_filt@meta.data <- seur_merged_filt@meta.data %>% mutate(drug2 = gsub("ERKi", "SCH772984", drug2) ) %>% 
+  mutate(drug2 = gsub("OXA", "Oxaliplatin", drug2) )  %>% mutate(drug = gsub("CENPE_MPS1", "CENPE + MPS1", drug) )
+
+seur_merged_filt@meta.data <- seur_merged_filt@meta.data %>% mutate(stage = if_else(drug2 == "DMSO", "DMSO", stage))
+
+seur_merged_filt$drug <- factor(seur_merged_filt$drug, levels = c("None", "CENPE", "CENPE + MPS1"))
+
+
+stage_cols <- RColorBrewer::brewer.pal(3, "Set1")
+names(stage_cols) <- c("DMSO",   "under_drug", "expansion" )
+
+panel_a_plot1 <- do_DimPlot(seur_merged_filt,   group.by = "stage", shuffle = TRUE, legend.title.position = "left", legend.title = "Stage") + ggtitle("Experimental stage (AKT batch 2)") + scale_color_manual("",values = stage_cols, labels = c("DMSO", "Re-growth", "Under drug")) + theme(text=element_text(size=FONT_SIZE,  family="Arial"), plot.title = element_text(hjust = 0.5))
+
+
+drug_cols <- c(RColorBrewer::brewer.pal(6, "Dark2"), "grey50")
+names(drug_cols) <- c("MK-2206" , "Capivasertib", "KU-0063794", 
+  "Trametinib", "Oxaliplatin", "SCH772984", "DMSO")
+
+panel_a_plot2 <- do_DimPlot(seur_merged_filt ,   group.by = "drug2", shuffle = TRUE, legend.title.position = "left", legend.title = "Drug") + ggtitle("Treatments distributiion (AKT batch 2)") + scale_color_manual("",values = drug_cols) + theme(text=element_text(size=FONT_SIZE,  family="Arial"), plot.title = element_text(hjust = 0.5)) 
+
+
+panel_a_plot3 <- do_DimPlot(seur_merged_filt,   group.by = "bc44", shuffle = TRUE, legend.title.position = "left", legend.title = "Treatment Window") + ggtitle("Lentiviral barcode distribution (AKT batch 2)") + scale_color_manual("",values = palette_MSI) + theme(text=element_text(size=FONT_SIZE,  family="Arial"), legend.position = "None", plot.title = element_text(hjust = 0.5))
+
+
+preT_cols <- RColorBrewer::brewer.pal(3, "Pastel1")
+names(preT_cols) <- c("None" ,"CENPE",  "CENPE + MPS1")
+
+panel_a_plot4 <-do_DimPlot(seur_merged_filt,   group.by = "drug", shuffle = TRUE, legend.title.position = "left", legend.title = "Drug") + ggtitle("Pre-Treatment (AKT batch 2)") + scale_color_manual("",values = preT_cols) + theme(text=element_text(size=FONT_SIZE,  family="Arial"), plot.title = element_text(hjust = 0.5))
+
+
+panel_i <- cowplot::plot_grid(plotlist = list(panel_a_plot1[[1]],panel_a_plot2[[1]],panel_a_plot3[[1]],panel_a_plot4[[1]]), ncol = 2, nrow = 2,align = "hv", labels  = c("A", "B", "C", "D"),
+                              font.label= list(size = 24, family = "Arial"), axis = "tblr") 
+
+
+panel_i %>% ggsave(filename = "panels/figure5_panel_i.pdf", height = 8, width = 6.9, scale = 1.5, device = "pdf")
+```
+
+
+## Panel K archetypes CENPE AKT
+```{r}
+
+arch_table_by_drug_AKT <-  readRDS("../../../archetype_params/MSS_batch2/arch_table_by_drug_AKT_batch2_RNA.rds") %>% mutate(drug = gsub("ERKi", "SCH772984", drug) ) %>% 
+  mutate(drug = gsub("OXA", "Oxaliplatin", drug) ) %>% mutate(stage = gsub("expansion", "re-growth", stage) ) %>% mutate(drug1 = gsub("CENPE_MPS1", "CENPE + MPS1", drug1) )
+
+arch_table_by_drug_AKT$drug1 <- factor(arch_table_by_drug_AKT$drug1, levels = c("None", "CENPE", "CENPE + MPS1"))
+
+palette_archs <- RColorBrewer::brewer.pal(length(arch_table_by_drug_AKT$archs %>% unique), "Set3")
+
+panel_k <- ggplot(arch_table_by_drug_AKT %>% group_by(stage , drug, drug1) %>% mutate(N = length(unique(key)), group = paste0(stage) ) %>% ungroup() %>% 
+                 select(-key, -weights) %>% unique() , aes(x = fct_rev(group) , y = avg_prob, fill = archs )) + 
+    geom_col() + theme_bw() + labs(xlab = "%") + facet_grid( drug1 ~ drug, scales = "free", space = "free", drop = TRUE) + RotatedAxis()   + scale_fill_manual("Archs", values  = palette_archs)  +
+  theme(text=element_text(size= FONT_SIZE + 3,  family="Arial"), plot.title = element_text(hjust = 0.5))  + xlab("") + ggtitle("RNA archetypes distribution (AKT batch 2)")
+
+panel_k %>% ggsave(filename = "panels/figure5_panel_k.pdf",width = 6, height = 8.5 , scale = 1., device = "pdf")
+
+```

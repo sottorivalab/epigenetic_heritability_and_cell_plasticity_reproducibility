@@ -1,0 +1,503 @@
+---
+title: "figure4"
+author: "Salvatore Milite"
+date: "08/03/2023"
+output: html_document
+---
+
+# Main
+
+```{r}
+library(tidyverse)
+library(ArchR)
+extrafont::loadfonts(quiet = T)
+
+
+archR_proj <- loadArchRProject("../../../archr_objects/MSS_batch1/")
+
+palette <- readRDS("../../../other_data/palette_enriched_100.rds")
+
+
+barcodes <- readr::read_tsv("../../../barcode_tables/MSS_batch1/barcode_multiome.tsv")
+
+barcodes <- barcodes %>% dplyr::filter(cell_name %in% archR_proj$cellNames)
+
+archR_proj <- addCellColData(ArchRProj = archR_proj, data = barcodes$real_bc44 %>% as.character(),
+    cells = barcodes$cell_name, name = "bc44", force = T)
+
+archR_proj <- addCellColData(ArchRProj = archR_proj, data = archR_proj$Sample %>% gsub("AZD", "Capivasertib", .) %>% 
+                               gsub("KU", "KU-0063794", .) %>% 
+                               gsub("MK", "MK-2206", .) %>% str_split(., pattern = "_") %>% sapply(., function(x) ifelse(length(x) == 2, x[1], x[2])),
+    cells = archR_proj$cellNames, name = "drug", force = T)
+
+archR_proj <- addCellColData(ArchRProj = archR_proj, data = ifelse(grepl("expansion", archR_proj$Sample), "expansion", "parental"),
+    cells = archR_proj$cellNames, name = "stage", force = T)
+
+
+```
+
+# Panel A
+
+```{r}
+
+
+source("../figure_utils.R")
+
+params <- readRDS("../../../archetype_params/MSS_batch1/arch_model_params_atac.rds")
+weights <- params$A
+
+colnames(weights) <- paste0("arch", 1:ncol(weights))
+rownames(weights) <- getCellNames(archR_proj)
+
+for(i in 1:ncol(params$A)) archR_proj <- addCellColData(archR_proj, data =weights[,i], name = paste0("arch", i), cells = rownames(weights), force = TRUE)
+
+archR_proj <- addCellColData(archR_proj, data = paste0("arch" ,apply(weights, 1, which.max)), name = "major_archetype", cells = rownames(weights), force = TRUE)
+
+pe_RNA <- plotEmbedding(archR_proj, name =  "Sample", embedding = "UMAP_RNA",  labelAsFactors=F, labelMeans=F, threads = 8, rastr = F, size = 1, plotAs = "points") +
+    labs(title = "10x scMultiome GEX + ATC", subtitle = "UMAP on LSI_RNA") + scale_color_brewer("", labels = c("Capivasertib", "Capivasertib->Trametinib", "Parental", "Trametinib"), palette = "Set1")
+
+pe_RNA <- add_scPubr_theme(pe_RNA)
+
+pe_ATAC <- (plotEmbedding(archR_proj, name = "Sample", embedding = "UMAP_ATAC",  labelAsFactors=F, labelMeans=F, threads = 8, rastr = T, size = 1, plotAs = "points")  %>% add_scPubr_theme(.)) +
+    labs(title = "10x scMultiome GEX + ATC", subtitle = "UMAP on LSI_ATAC") + scale_color_brewer("", labels = c("Capivasertib", "Capivasertib->Trametinib", "Parental", "Trametinib"), palette = "Set1")
+
+
+pe_Combine <- (plotEmbedding(archR_proj, name = "Sample", embedding = "UMAP_Combined",  labelAsFactors=F, labelMeans=F, threads = 8, rastr = T, size = 1, plotAs = "points")  %>% add_scPubr_theme(.)) +
+  labs(title = "10x scMultiome GEX + ATC", subtitle = "UMAP on LSI_Combined") + scale_color_brewer("", labels = c("Capivasertib", "Capivasertib->Trametinib", "Parental", "Trametinib"), palette = "Set1")
+
+
+
+pe <- (plotEmbedding(archR_proj, name = paste0("arch", 1:ncol(weights)), embedding = "UMAP_Combined",  labelAsFactors=F, labelMeans=F, threads = 8, rastr = T, size = 1, plotAs = "points"))  
+
+pe <- lapply(1:length(pe) , function(x) {add_scPubr_theme(pe[[x]]) + labs(title = "10x scMultiome GEX + ATC", subtitle = glue::glue("Archetype {x} composition on UMAP_Combined")) + scale_color_distiller("AA weight",palette = "Blues") + 
+    theme(legend.position = "bottom")})
+
+pe_arr <- ggpubr::ggarrange(pe_RNA, pe_ATAC, pe_Combine, ncol = 3, nrow = 1, common.legend = T, legend = "bottom")
+pe_arch <- ggpubr::ggarrange(plotlist = pe, ncol = 3, nrow = 1, common.legend = T, legend = "bottom")
+
+
+panel_a <-  ggpubr::ggarrange(pe_arr, pe_arch, ncol = 1, nrow = 2)
+  
+arch_table_by_geno <- getCellColData(archR_proj) %>% as.data.frame() %>% 
+  rownames_to_column("key") %>% select(key,drug, stage, bc44, matches("arch[1-9][0-9]?")) %>% pivot_longer(starts_with("arch"), names_to = "archs", values_to = "weights") %>% group_by(drug, stage, bc44, across(starts_with("arch"))) %>% mutate(avg_prob = mean(weights)) 
+
+
+```
+
+## Panel B CNV tree
+
+```{r}
+library(ggtree)
+
+congas_obj <- readRDS("../../../other_data/congas_fit_final.rds")
+
+z_nk <- Rcongas:::get_z_nk(congas_obj) %>% dplyr::rename(CONGAS = cluster) %>% dplyr::select(cell, CONGAS, z_nk)
+generate_colors <- function(n) {
+  library(RColorBrewer)
+  brewer_palette <- brewer.pal(n, "Dark2") # Get the max number of colors (11) from a diverging palette
+  #color_func <- colorRampPalette(brewer_palette) # Interpolate these colors
+  return(brewer_palette) # Generate n colors
+}
+
+palette <- readRDS("../../../other_data/palette_enriched_100.rds")
+
+cell_data <- readRDS("../../../other_data/multiome_updated_cellData.rds") %>% as.data.frame() %>% rownames_to_column("cell")
+
+cell_data <- dplyr::inner_join(cell_data, z_nk) %>% dplyr::filter(z_nk > 0.9)
+
+cell_data_bc <- cell_data %>% dplyr::filter(!is.na(bc44)) %>% dplyr::group_by(CONGAS) %>% dplyr::mutate(N_tot = n()) %>% ungroup %>%
+ dplyr::group_by(CONGAS, bc44, N_tot) %>% dplyr::summarize(perc = n() / N_tot) %>% dplyr::select(-N_tot) %>% unique() %>%
+  dplyr::rename(node = CONGAS) %>% dplyr::select(node, perc) 
+
+cell_data_Sample <- cell_data %>% dplyr::group_by(CONGAS, Sample) %>%  dplyr::summarize(N_in_samples = n() ) %>%  unique() %>%
+  dplyr::rename(node = CONGAS) %>% select(node, N_in_samples, Sample) %>% mutate(Sample = gsub("_expansion", "", Sample)) %>% mutate(Sample = gsub("_control", "", Sample))   %>% mutate(Sample = gsub("_", "->", Sample)) 
+
+cell_data_Sample <- cell_data_Sample %>% mutate(Sample = gsub("AZD", "Capivasertib", Sample) ) %>% 
+  mutate(Sample = gsub("KU", "KU-0063794", Sample) ) %>% 
+  mutate(Sample = gsub("MK", "MK-2206", Sample) )
+
+cell_data_archs <- cell_data %>% rownames_to_column("key") %>% 
+  select(key,Sample, CONGAS, matches("arch[1-9][1-9]?")) %>% 
+  pivot_longer(starts_with("arch"), names_to = "archs", values_to = "weights") %>% 
+  dplyr::group_by(CONGAS, across(starts_with("arch"))) %>% dplyr::summarize(avg_prob = mean(weights)) %>% 
+  dplyr::rename(node = CONGAS) %>% select(node, avg_prob, archs) %>% ungroup()
+
+n_cells <- Rcongas:::get_cluster_assignments(congas_obj) %>% dplyr::group_by(cluster) %>% dplyr::summarize(N = n())
+colnames(n_cells)[1] <- "nodes"
+
+
+
+archetype_colors <- generate_colors(length(unique(n_cells$archs))) 
+
+names(archetype_colors) <- unique(cell_data_archs$archs)
+
+
+tree <- ggtree::read.tree("../../../other_data/medicc_input_congas_final_tree.new")
+
+p_tree <- ggtree(tree, size = 1.1) + geom_tiplab(hjust = -.2) + geom_nodepoint(color = "steelblue", size = 1.2) +
+  geom_tippoint(size = 1.2) +
+      ggtree::theme_tree2() + geom_rootedge()  
+
+p_tree <- p_tree %<+% n_cells
+
+sample_colors <- RColorBrewer::brewer.pal("Set1",n = length(unique(cell_data_Sample$Sample))) 
+
+names(sample_colors) <- c("Capivasertib", "Capivasertib->Trametinib", "Parental", "Trametinib")
+
+palette_all <- c(archetype_colors, palette)
+palette_all <- c(palette_all, sample_colors)
+
+
+panel_b <- p_tree + geom_tippoint(position = "nudge")  +
+  geom_facet(panel = "Therapy", data = cell_data_Sample %>% ungroup %>% select(node, everything()) , geom = geom_col, 
+                 aes(x = as.numeric(N_in_samples), 
+                 fill = Sample), orientation = 'y') + 
+  scale_fill_manual("", values =  palette_all,
+                                                                      breaks = c("Parental", "Capivasertib","Trametinib", "Capivasertib->Trametinib"))+
+  guides(fill=guide_legend(nrow = 1,byrow=TRUE)) + theme(legend.position = "bottom" )  + 
+  theme(text = element_text(family = "Arial", size = 15))
+```
+
+## Panel C ATAC archetype distribution by barcode
+
+```{r}
+library(ggalluvial)
+library(ggtext)
+
+
+
+arch_table_by_bc <- getCellColData(archR_proj) %>% as.data.frame() %>% dplyr::filter(!is.na(bc44)) %>%
+  dplyr::mutate(bc_barplot = if_else(bc44 == "CTTCGGGACCAAGGTGGTCAGTCAACGTCATGACACGTACTGAC", "CTTCGGGACCAAGGTGGTCAGTCAACGTCATGACACGTACTGAC" ,"other")) %>%
+  rownames_to_column("key") %>% select(key,Sample, bc_barplot, matches("arch[1-9][0-9]?")) %>% pivot_longer(starts_with("arch"), names_to = "archs", values_to = "weights") %>% 
+  dplyr::group_by(Sample, bc_barplot, across(starts_with("arch"))) %>% dplyr::mutate(avg_prob = mean(weights), N = n()) 
+
+arch_table_by_bc$stage <- ifelse(grepl("Parental", arch_table_by_bc$Sample), "parental", "expansion")
+
+arch_table_by_bc$drug <- arch_table_by_bc$Sample %>% gsub("_expansion", "", .) %>% gsub("_control", "", .) %>% gsub("AZD", "Capivasertib", .)   %>%
+                                gsub("_", "->", .)
+
+df_barplot_1 <- arch_table_by_bc %>% ungroup()  %>% filter(Sample %in% c("Parental_control", "Trametinib_expansion")) %>%
+                      select(avg_prob, archs, Sample, bc_barplot, N)  %>% unique()
+
+
+df_barplot_1$Sample <- factor(df_barplot_1$Sample %>% gsub("_expansion", "", .) %>% gsub("_control", "", .) %>% gsub("AZD", "Capivasertib", .)   %>%
+                                gsub("_", "->", .), levels = c("Parental", "Trametinib"))
+
+
+
+
+p_bar_1 <- from_double_to_ridgeplot(arch_table_by_bc, "bc_barplot", "CTTCGGGACCAAGGTGGTCAGTCAACGTCATGACACGTACTGAC", "Trametinib", " under Trametinib", "blue barcode", palette["CTTCGGGACCAAGGTGGTCAGTCAACGTCATGACACGTACTGAC"])
+
+p_bar_2 <- from_double_to_ridgeplot(arch_table_by_bc, "bc_barplot", "CTTCGGGACCAAGGTGGTCAGTCAACGTCATGACACGTACTGAC", "Capivasertib->Trametinib", " under Capivasertib->Trametinib", "blue barcode", palette["CTTCGGGACCAAGGTGGTCAGTCAACGTCATGACACGTACTGAC"])
+
+
+panel_c <- p_bar_1/ p_bar_2
+
+```
+
+
+
+
+
+
+## Panel D RNA archetype distribution by CNA clone
+
+```{r}
+params <- readRDS("../../../archetype_params/MSS_batch1/arch_model_params_multi_rna.rds")
+weights_rna <- params$A_rna
+colnames(weights_rna) <- paste0("arch_rna", 1:ncol(weights_rna))
+rownames(weights_rna) <- getCellNames(archR_proj)
+
+for(i in 1:ncol(weights_rna)) archR_proj <- addCellColData(archR_proj, data =weights_rna[,i], name = paste0("arch_rna", i), cells = rownames(weights_rna), force = TRUE)
+
+congas_obj <- readRDS("/home/salvatore.milite/data/sc_project/javi_sc_multiome/scripts/congas_fit_final.rds")
+ca <- Rcongas::get_fit(congas_obj, what = "cluster_assignments") 
+
+archR_proj <- addCellColData(ArchRProj = archR_proj, data =ca$cluster,
+    cells = ca$cell, name = "CONGAS", force = TRUE)
+
+```
+
+
+```{r}
+library(ggalluvial)
+
+# Auto-generate archetype colors
+generate_colors <- function(n) {
+  library(RColorBrewer)
+  brewer_palette <- brewer.pal(n, "Dark2") # Get the max number of colors (11) from a diverging palette
+  #color_func <- colorRampPalette(brewer_palette) # Interpolate these colors
+  return(brewer_palette) # Generate n colors
+}
+
+archetype_colors <- generate_colors(ncol(weights_rna)) 
+
+names(archetype_colors) <- colnames(weights_rna)
+
+
+
+arch_table_by_CNA <- getCellColData(archR_proj) %>% as.data.frame() %>% 
+  mutate(CONGAS_grouped = ifelse(CONGAS %in% c( "C2", "C8", "C10"), "C[2,8,10]", "C[1,3,4,5,6,7,9]")) %>%
+  rownames_to_column("key") %>% select(key,Sample, CONGAS_grouped, starts_with("arch_rna")) %>% pivot_longer(starts_with("arch_rna"), names_to = "archs", values_to = "weights") %>% dplyr::group_by(Sample, CONGAS_grouped, across(starts_with("arch"))) %>% dplyr::mutate(avg_prob = mean(weights), N = n()) 
+
+
+
+df_barplot_1 <- arch_table_by_CNA %>% ungroup()  %>% filter(Sample %in% c("Parental_control", "Trametinib_expansion")) %>%
+                      select(avg_prob, archs, Sample, CONGAS_grouped, N)  %>% unique()
+
+
+df_barplot_1$Sample <- factor(df_barplot_1$Sample %>% gsub("_expansion", "", .) %>% gsub("_control", "", .)  %>% gsub("AZD", "Capivasertib", .) %>%
+                                gsub("_", "->", .), levels = c("Parental", "Trametinib"))
+
+p_bar_1_rna <- ggplot(df_barplot_1 %>% mutate(label_p = paste0(Sample, " (", N,")")),
+       aes(y = avg_prob, x = fct_reorder(label_p,  as.integer(Sample) ))) +
+  geom_flow(aes(alluvium = archs), alpha= .9, 
+            lty = 2, fill = "white", color = "black",
+            curve_type = "linear", 
+            width = .5) +
+  geom_col(aes(fill = archs), width = .5, color = "black") +
+  scale_fill_manual("", 
+                    values= archetype_colors)+
+  facet_wrap(~CONGAS_grouped, scales = "free_x") +
+  scale_y_continuous(expand = c(0,0)) +
+  cowplot::theme_minimal_hgrid(font_size = 15) + xlab("") + Seurat::RotatedAxis() + ylab("AA weight") +
+  labs(title = 'Avg. archetypal weight distribution (CONGAS)') 
+
+
+df_barplot_2 <- arch_table_by_CNA %>% ungroup()  %>% filter(Sample %in% c("Parental_control", "AZD_expansion", "AZD_Trametinib_expansion")) %>%
+                      select(avg_prob, archs, Sample, CONGAS_grouped, N)  %>% unique()
+
+df_barplot_2$Sample <- factor(df_barplot_2$Sample %>% gsub("_expansion", "", .) %>% gsub("_control", "", .) %>% gsub("AZD", "Capivasertib", .)  %>%
+                                gsub("Capivasertib_", "", .), levels = c("Parental", "Capivasertib", "Trametinib"))
+
+p_bar_2_rna <- ggplot(df_barplot_2 %>% mutate(label_p = paste0(Sample, " (", N,")")),
+       aes(y = avg_prob, x = fct_reorder(label_p,  as.integer(Sample) ))) +
+  geom_flow(aes(alluvium = archs), alpha= .9, 
+            lty = 2, fill = "white", color = "black",
+            curve_type = "linear", 
+            width = .5) +
+  geom_col(aes(fill = archs), width = .5, color = "black") +
+  scale_fill_manual("", 
+                    values= archetype_colors)+
+  facet_wrap(~CONGAS_grouped, scales = "free_x") +
+  scale_y_continuous(expand = c(0,0)) +
+  cowplot::theme_minimal_hgrid(font_size = 15) + xlab("") + Seurat::RotatedAxis() + ylab("AA weight") +
+  labs(title = 'Avg. archetypal weight distribution (CONGAS)') 
+
+df_barplot_3 <- arch_table_by_CNA %>% ungroup()  %>%
+                      select(avg_prob, archs, Sample, CONGAS_grouped, N)  %>% unique()
+
+df_barplot_3$Sample <- factor(df_barplot_3$Sample %>% gsub("_expansion", "", .) %>% gsub("_control", "", .) %>% gsub("AZD", "Capivasertib", .)  %>%
+                                gsub("_", "->", .), levels = c("Parental","Trametinib", "Capivasertib", "Capivasertib->Trametinib"))
+
+p_bar_3_rna <- ggplot(df_barplot_3 %>% mutate(label_p = paste0(CONGAS_grouped, " (", N,")")),
+       aes(y = avg_prob, x = label_p)) +
+  geom_flow(aes(alluvium = archs), alpha= .9, 
+            lty = 2, fill = "white", color = "black",
+            curve_type = "linear", 
+            width = .5) +
+  geom_col(aes(fill = archs), width = .5, color = "black") +
+  scale_fill_manual("", 
+                    values= archetype_colors)+
+  facet_wrap(~Sample, scales = "free_x") +
+  scale_y_continuous(expand = c(0,0)) +
+  cowplot::theme_minimal_hgrid(font_size = 15) + xlab("") + Seurat::RotatedAxis() + ylab("AA weight") +
+  labs(title = 'Average archetypal weight distribution', subtitle = "Grouped by CONGAS clusters")  + 
+  theme(text = element_text(family = "Arial"))
+
+
+#panel_d <- ggpubr::ggarrange(p_bar_1_rna, p_bar_2_rna, ncol = 1,heights = c(1,1))
+
+panel_d <- p_bar_1_rna / p_bar_2_rna
+
+```
+
+
+
+## Panel E ATAC archetype distribution
+```{r}
+library(ggalluvial)
+
+archetype_colors <- RColorBrewer::brewer.pal(3,"Set2")
+
+arch_table_by_CNA <- getCellColData(archR_proj) %>% as.data.frame() %>% 
+  mutate(CONGAS_grouped = ifelse(CONGAS %in% c( "C2", "C8", "C10"), "C[2,8,10]", "C[1,3,4,5,6,7,9]")) %>%
+  rownames_to_column("key") %>% select(key,Sample, CONGAS_grouped, matches("arch[1-9][0-9]?")) %>% pivot_longer(starts_with("arch"), names_to = "archs", values_to = "weights") %>% dplyr::group_by(Sample, CONGAS_grouped, across(starts_with("arch"))) %>% dplyr::mutate(avg_prob = mean(weights), N = n()) 
+
+
+
+df_barplot_1 <- arch_table_by_CNA %>% ungroup()  %>% filter(Sample %in% c("Parental_control", "Trametinib_expansion")) %>%
+                      select(avg_prob, archs, Sample, CONGAS_grouped, N)  %>% unique()
+
+
+df_barplot_1$Sample <- factor(df_barplot_1$Sample %>% gsub("_expansion", "", .) %>% gsub("_control", "", .) %>% gsub("AZD", "Capivasertib", .)   %>%
+                                gsub("_", "->", .), levels = c("Parental", "Trametinib"))
+
+p_bar_1 <- ggplot(df_barplot_1 %>% mutate(label_p = paste0(Sample, " (", N,")")),
+       aes(y = avg_prob, x = fct_reorder(label_p,  as.integer(Sample) ))) +
+  geom_flow(aes(alluvium = archs), 
+            lty = 2, fill = "white", color = "black",
+            curve_type = "linear", 
+            width = .5) +
+  geom_col(aes(fill = archs), width = .5, color = "black") +
+  scale_fill_manual("", 
+                    values= archetype_colors)+
+  facet_wrap(~CONGAS_grouped, scales = "free_x") +
+  scale_y_continuous(expand = c(0,0)) +
+  cowplot::theme_minimal_hgrid(font_size = 15) + xlab("") + Seurat::RotatedAxis() + ylab("AA weight") +
+  labs(title = 'Avg. archetypal weight distribution (CONGAS)') 
+
+
+df_barplot_2 <- arch_table_by_CNA %>% ungroup()  %>% filter(Sample %in% c("Parental_control", "AZD_expansion", "AZD_Trametinib_expansion")) %>%
+                      select(avg_prob, archs, Sample, CONGAS_grouped, N)  %>% unique()
+
+df_barplot_2$Sample <- factor(df_barplot_2$Sample %>% gsub("_expansion", "", .) %>% gsub("_control", "", .) %>% gsub("AZD", "Capivasertib", .)  %>% 
+                                gsub("Capivasertib_", "", .), levels = c("Parental", "Capivasertib", "Trametinib")) 
+
+p_bar_2 <- ggplot(df_barplot_2 %>% mutate(label_p = paste0(Sample, " (", N,")")),
+       aes(y = avg_prob, x = fct_reorder(label_p,  as.integer(Sample) ))) +
+  geom_flow(aes(alluvium = archs), 
+            lty = 2, fill = "white", color = "black",
+            curve_type = "linear", 
+            width = .5) +
+  geom_col(aes(fill = archs), width = .5, color = "black") +
+  scale_fill_manual("", 
+                    values= archetype_colors)+
+  facet_wrap(~CONGAS_grouped, scales = "free_x") +
+  scale_y_continuous(expand = c(0,0)) +
+  cowplot::theme_minimal_hgrid(font_size = 15) + xlab("") + Seurat::RotatedAxis() + ylab("AA weight") +
+  labs(title = 'Avg. archetypal weight distribution (CONGAS)') 
+
+df_barplot_3 <- arch_table_by_CNA %>% ungroup()  %>%
+                      select(avg_prob, archs, Sample, CONGAS_grouped, N)  %>% unique()
+
+df_barplot_3$Sample <- factor(df_barplot_3$Sample %>% gsub("_expansion", "", .) %>% gsub("_control", "", .) %>% gsub("AZD", "Capivasertib", .)  %>%
+                                gsub("_", "->", .), levels = c("Parental","Trametinib", "Capivasertib", "Capivasertib->Trametinib"))
+
+p_bar_3 <- ggplot(df_barplot_3 %>% mutate(label_p = paste0(CONGAS_grouped, " (", N,")")),
+       aes(y = avg_prob, x = label_p)) +
+  geom_flow(aes(alluvium = archs), 
+            lty = 2, fill = "white", color = "black",
+            curve_type = "linear", 
+            width = .5) +
+  geom_col(aes(fill = archs), width = .5, color = "black") +
+  scale_fill_manual("", 
+                    values= archetype_colors)+
+  facet_wrap(~Sample, scales = "free_x") +
+  scale_y_continuous(expand = c(0,0)) +
+  cowplot::theme_minimal_hgrid(font_size = 15) + xlab("") + Seurat::RotatedAxis() + ylab("AA weight") +
+  labs(title = 'Average archetypal weight distribution', subtitle = "Grouped by CONGAS clusters")  + 
+  theme(text = element_text(family = "Arial"))
+
+
+#panel_e <- ggpubr::ggarrange(p_bar_1, p_bar_2, ncol = 1,heights = c(1,1))
+
+panel_e <- p_bar_1 / p_bar_2
+
+
+```
+
+
+## Panel F ATAC Archetype distribution by barcode MSI
+
+```{r}
+library(ggalluvial)
+library(ggtext)
+
+palette_bc_MSI <- readRDS("../../../other_data/palette_MSI.rds")
+
+
+archR_proj_MSI <- loadArchRProject("../../../archr_objects/MSI/")
+
+params <- readRDS("../../../archetype_params/MSI/arch_model_params_atac_MSI.rds")
+weights <- params$A
+
+colnames(weights) <- paste0("arch", 1:ncol(weights))
+rownames(weights) <- getCellNames(archR_proj_MSI)
+
+for(i in 1:ncol(params$A)) archR_proj_MSI <- addCellColData(archR_proj_MSI, data =weights[,i], name = paste0("arch", i), cells = rownames(weights), force = TRUE)
+
+arch_table_by_bc_MSI <- getCellColData(archR_proj_MSI) %>% as.data.frame() %>% dplyr::filter(!is.na(bc44)) %>%
+  rownames_to_column("key") %>% dplyr::select(key,drug2, drug1, bc44, matches("arch[1-9][0-9]?")) %>% pivot_longer(starts_with("arch"), names_to = "archs", values_to = "weights") %>% 
+  dplyr::group_by(drug2, drug1, bc44, across(starts_with("arch"))) %>% dplyr::mutate(avg_prob = mean(weights), N = n()) 
+
+arch_table_by_bc_MSI$stage <- ifelse(grepl("DMSO", arch_table_by_bc_MSI$drug1), "parental", "expansion")
+
+arch_table_by_bc_MSI$drug <- arch_table_by_bc_MSI$drug1 %>%  gsub("OXA", "Oxaliplatin", .) 
+  
+
+df_barplot_1 <- arch_table_by_bc_MSI %>% ungroup()  %>% filter(drug2 == "P") %>%
+                      select(avg_prob, archs, drug, stage, bc44)  %>% unique()
+
+
+p_bar_1_f <- from_double_to_ridgeplot(add_rescaled_other_bc(df_barplot_1, "CATTAACAGGTAAACATGTGTGGTTGACTGGTTGGTCAACACGT"),
+                                    "bc_new", "CATTAACAGGTAAACATGTGTGGTTGACTGGTTGGTCAACACGT", "Oxaliplatin", " under Oxaliplatin (MSI)", "violet barcode", palette_bc_MSI["CATTAACAGGTAAACATGTGTGGTTGACTGGTTGGTCAACACGT"])
+
+p_bar_2_f <- from_double_to_ridgeplot(add_rescaled_other_bc(df_barplot_1, "GACTATCGGTACATCAGTCAACTGACTGGTTGCACAACGTGTGT"),
+                                    "bc_new", "GACTATCGGTACATCAGTCAACTGACTGGTTGCACAACGTGTGT", "Oxaliplatin", " under Oxaliplatin (MSI)", "blue barcode", palette_bc_MSI["GACTATCGGTACATCAGTCAACTGACTGGTTGCACAACGTGTGT"])
+
+
+```
+
+## Panel G ATAC Archetype distribution by barcode AKT batch 2
+
+
+```{r}
+library(ggalluvial)
+library(ggtext)
+
+palette_bc_AKT <- readRDS("../../../other_data/palette_enriched_100.rds")
+
+
+archR_proj_AKT_batch2 <- loadArchRProject("../../../archr_objects/MSS_batch2/")
+
+params <- readRDS("../../../archetype_params/MSS_batch2/arch_model_params_atac_AKT.rds")
+weights <- params$A
+
+colnames(weights) <- paste0("arch", 1:ncol(weights))
+rownames(weights) <- getCellNames(archR_proj_AKT_batch2)
+
+for(i in 1:ncol(params$A)) archR_proj_AKT_batch2 <- addCellColData(archR_proj_AKT_batch2, data =weights[,i], name = paste0("arch", i), cells = rownames(weights), force = TRUE)
+
+arch_table_by_bc_AKT_batch2 <- getCellColData(archR_proj_AKT_batch2) %>% as.data.frame() %>% dplyr::filter(!is.na(bc44)) %>%
+  rownames_to_column("key") %>% dplyr::select(key,drug2, drug1, bc44, matches("arch[1-9][0-9]?")) %>% pivot_longer(starts_with("arch"), names_to = "archs", values_to = "weights") %>% 
+  dplyr::group_by(drug2, drug1, bc44, across(starts_with("arch"))) %>% dplyr::mutate(avg_prob = mean(weights), N = n()) 
+
+arch_table_by_bc_AKT_batch2$stage <- ifelse(grepl("DMSO", arch_table_by_bc_AKT_batch2$drug1), "parental", "expansion")
+
+arch_table_by_bc_AKT_batch2$drug <- arch_table_by_bc_AKT_batch2$drug1 %>%  gsub("OXA", "Oxaliplatin", .) 
+  
+
+df_barplot_1 <- arch_table_by_bc_AKT_batch2 %>% ungroup()  %>% filter(drug2 == "P") %>%
+                      select(avg_prob, archs, drug, stage, bc44)  %>% unique()
+
+
+p_bar_1_g <- from_double_to_ridgeplot(add_rescaled_other_bc(df_barplot_1, "CTTCGGGACCAAGGTGGTCAGTCAACGTCATGACACGTACTGAC"),
+                                    "bc_new", "CTTCGGGACCAAGGTGGTCAGTCAACGTCATGACACGTACTGAC", "Oxaliplatin", " under Oxaliplatin (AKT batch 2)", "blue barcode", palette_bc_AKT["CTTCGGGACCAAGGTGGTCAGTCAACGTCATGACACGTACTGAC"])
+
+```
+
+
+
+## Final Figure
+
+```{r}
+panel_b_full <- ggpubr::ggarrange(NULL, panel_b, ncol = 1, labels = c("B", ""), font.label = list(size = 24 , family = "Arial"),
+                                  heights = c(0.1,1))
+
+Figure_4_top <- ggpubr::ggarrange(panel_a,NULL, panel_b_full, NULL, nrow = 1, labels = c("A", "", "", ""), 
+                                  font.label = list(size = 24 , family = "Arial"), widths = c(1,0.15,1,0.15))
+
+Figure_4_bottom <-  ggpubr::ggarrange(panel_c, NULL, panel_d, NULL, panel_e, nrow = 1, labels = c("C","", "D","", "E"), font.label = list(size = 24 , family = "Arial"), widths = c(1,0.2,1,0.2,1))
+
+Figure_4_bottom_bottom <-  ggpubr::ggarrange(p_bar_1_f,NULL, p_bar_2_f, NULL,p_bar_1_g, nrow = 1, labels = c("F","", "G", "", "H"), widths = c(1,0.2,1, 0.2, 1),
+                                             font.label = list(size = 24 , family = "Arial"))
+
+figure_4 <- ggpubr::ggarrange(Figure_4_top, Figure_4_bottom, Figure_4_bottom_bottom, ncol = 1, nrow = 3, heights = c(0.8,1, 0.5) )
+
+figure_4 %>% ggsave(plot = ., "figure4.pdf", device = "pdf",width = 8.3, height = 11.7 / 2, dpi = 300, scale = 3.6, bg = "white")
+
+figure_4 %>% ggsave(plot = ., "figure4.png", device = "png",width = 8.3, height = 11.7 / 2, dpi = 300, scale = 3.6, bg = "white")
+
+```
+
